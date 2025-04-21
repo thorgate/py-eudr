@@ -47,7 +47,7 @@ def main(*args):
     )
     client_id = options.client_id or os.environ.get("EUDR_CLIENT_ID", "eudr-test")
 
-    client = Client(
+    client = Client().authenticate(
         username=username,
         authentication_key=authentication_key,
         client_id=client_id,

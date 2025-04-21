@@ -9,20 +9,22 @@ class EchoClient(ZeepClient):
         "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EudrEchoService?wsdl"
     )
 
-    def __init__(
+    def __init__(self):
+        super().__init__(
+            self.service_url,
+        )
+
+    def authenticate(
         self,
         *,
         username: str = "",
         authentication_key: str = "",
         client_id: str = "",
     ):
+        """Authenticate the client with a new username and authentication key."""
         self.wsse = EUDRUsernameToken(
             username,
             authentication_key,
-        )
-        super().__init__(
-            self.service_url,
-            wsse=self.wsse,
         )
         self.set_default_soapheaders(
             {"webServiceClientId": client_id},

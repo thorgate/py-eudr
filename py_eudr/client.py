@@ -5,19 +5,10 @@ from py_eudr.base import EchoClient, RetrievalClient, SubmissionClient
 class Client:
     def __init__(
         self,
-        *,
-        username: str,
-        authentication_key: str,
-        client_id: str,
     ):
-        kwargs = {
-            "username": username,
-            "authentication_key": authentication_key,
-            "client_id": client_id,
-        }
-        self.echo_client = EchoClient(**kwargs)
-        self.retrieval_client = RetrievalClient(**kwargs)
-        self.submission_client = SubmissionClient(**kwargs)
+        self.echo_client = EchoClient()
+        self.retrieval_client = RetrievalClient()
+        self.submission_client = SubmissionClient()
 
         self.test_echo: t.Callable[[str], str] = self.echo_client.service.testEcho
         self.get_dds_info: t.Callable[[str], t.List[str]] = (
@@ -48,3 +39,20 @@ class Client:
             (object,),
             types,
         )
+
+    def authenticate(
+        self,
+        *,
+        username: str,
+        authentication_key: str,
+        client_id: str,
+    ) -> "Client":
+        kwargs = {
+            "username": username,
+            "authentication_key": authentication_key,
+            "client_id": client_id,
+        }
+        self.echo_client.authenticate(**kwargs)
+        self.retrieval_client.authenticate(**kwargs)
+        self.submission_client.authenticate(**kwargs)
+        return self
