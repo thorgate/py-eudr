@@ -1,4 +1,6 @@
 import typing as t
+from contextlib import contextmanager
+
 from py_eudr.base import EchoClient, RetrievalClient, SubmissionClient
 
 
@@ -56,3 +58,26 @@ class Client:
         self.retrieval_client.authenticate(**kwargs)
         self.submission_client.authenticate(**kwargs)
         return self
+
+    @contextmanager
+    def authenticated(
+        self,
+        *,
+        username: str,
+        authentication_key: str,
+        client_id: str,
+    ):
+        with self.echo_client.authenticated(
+            username=username,
+            authentication_key=authentication_key,
+            client_id=client_id,
+        ), self.retrieval_client.authenticated(
+            username=username,
+            authentication_key=authentication_key,
+            client_id=client_id,
+        ), self.submission_client.authenticated(
+            username=username,
+            authentication_key=authentication_key,
+            client_id=client_id,
+        ):
+            yield self

@@ -47,20 +47,19 @@ def main(*args):
     )
     client_id = options.client_id or os.environ.get("EUDR_CLIENT_ID", "eudr-test")
 
-    client = Client().authenticate(
+    with Client().authenticated(
         username=username,
         authentication_key=authentication_key,
         client_id=client_id,
-    )
-
-    if options.retrieve:
-        retrieve(client, options.retrieve)
-    elif options.submit_random:
-        submit_random(client)
-    elif options.retract:
-        retract(client, options.retract)
-    else:
-        echo(client)
+    ) as client:
+        if options.retrieve:
+            retrieve(client, options.retrieve)
+        elif options.submit_random:
+            submit_random(client)
+        elif options.retract:
+            retract(client, options.retract)
+        else:
+            echo(client)
 
 
 def echo(client: Client):
