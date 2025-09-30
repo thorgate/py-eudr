@@ -9,11 +9,15 @@ from py_eudr.username_token import EUDRUsernameToken
 
 
 class EchoClient(ZeepClient):
-    service_url = (
+    service_url_test = (
         "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EudrEchoService?wsdl"
     )
+    service_url_production = (
+        "https://eudr.webcloud.ec.europa.eu/tracesnt/ws/EudrEchoService?wsdl"
+    )
 
-    def __init__(self):
+    def __init__(self, *, test: bool = True):
+        self.test = test
         self._wsse_context = contextvars.ContextVar(
             "_wsse_context",
             default=t.cast(t.Optional[EUDRUsernameToken], None),
@@ -23,15 +27,24 @@ class EchoClient(ZeepClient):
             default=t.cast(t.Optional[t.Dict[str, str]], None),
         )
         super().__init__(
-            self.service_url,
+            self.service_url_test if self.test else self.service_url_production,
         )
+
+    def get_client_id(self, client_id: t.Optional[str]):
+        if client_id is not None:
+            return client_id
+
+        if self.test:
+            return "eudr-test"
+
+        return "eudr-repository"
 
     def authenticate(
         self,
         *,
         username: str,
         authentication_key: str,
-        client_id: str,
+        client_id: t.Optional[str] = None,
     ):
         """Authenticate the client with a new username and authentication key."""
         self.wsse = EUDRUsernameToken(
@@ -39,16 +52,16 @@ class EchoClient(ZeepClient):
             authentication_key,
         )
         self.set_default_soapheaders(
-            {"webServiceClientId": client_id},
+            {"webServiceClientId": self.get_client_id(client_id)},
         )
 
     @contextmanager
     def authenticated(
         self,
-        *args,
+        *,
         username: str,
         authentication_key: str,
-        client_id: str,
+        client_id: t.Optional[str] = None,
     ):
         """Provide a thread and async safe client authenticated with given credentials."""
         wsse_token = self._wsse_context.set(
@@ -58,7 +71,7 @@ class EchoClient(ZeepClient):
             )
         )
         header_token = self._default_soapheaders_context.set(
-            {"webServiceClientId": client_id}
+            {"webServiceClientId": self.get_client_id(client_id)}
         )
         yield self
         self._wsse_context.reset(wsse_token)
@@ -86,8 +99,14 @@ class EchoClient(ZeepClient):
 
 
 class RetrievalClient(EchoClient):
-    service_url = "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRRetrievalServiceV1?wsdl"
+    service_url_test = "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRRetrievalServiceV1?wsdl"
+    service_url_production = (
+        "https://eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRRetrievalServiceV1?wsdl"
+    )
 
 
 class SubmissionClient(EchoClient):
-    service_url = "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRSubmissionServiceV1?wsdl"
+    service_url_test = "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRSubmissionServiceV1?wsdl"
+    service_url_production = (
+        "https://eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRSubmissionServiceV1?wsdl"
+    )

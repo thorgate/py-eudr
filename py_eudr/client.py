@@ -7,10 +7,12 @@ from py_eudr.base import EchoClient, RetrievalClient, SubmissionClient
 class Client:
     def __init__(
         self,
+        *,
+        test: bool = True,
     ):
-        self.echo_client = EchoClient()
-        self.retrieval_client = RetrievalClient()
-        self.submission_client = SubmissionClient()
+        self.echo_client = EchoClient(test=test)
+        self.retrieval_client = RetrievalClient(test=test)
+        self.submission_client = SubmissionClient(test=test)
 
         self.test_echo: t.Callable[[str], str] = self.echo_client.service.testEcho
         self.get_dds_info: t.Callable[[str], t.List[str]] = (
@@ -47,7 +49,7 @@ class Client:
         *,
         username: str,
         authentication_key: str,
-        client_id: str,
+        client_id: t.Optional[str] = None,
     ) -> "Client":
         kwargs = {
             "username": username,
@@ -65,7 +67,7 @@ class Client:
         *,
         username: str,
         authentication_key: str,
-        client_id: str,
+        client_id: t.Optional[str] = None,
     ):
         with self.echo_client.authenticated(
             username=username,
