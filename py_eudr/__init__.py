@@ -1,1 +1,1 @@
-from .client import Client  # noqa
+from .client import Client, ClientV3  # noqa

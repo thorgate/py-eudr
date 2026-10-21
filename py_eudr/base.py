@@ -73,9 +73,11 @@ class EchoClient(ZeepClient):
         header_token = self._default_soapheaders_context.set(
             {"webServiceClientId": self.get_client_id(client_id)}
         )
-        yield self
-        self._wsse_context.reset(wsse_token)
-        self._default_soapheaders_context.reset(header_token)
+        try:
+            yield self
+        finally:
+            self._wsse_context.reset(wsse_token)
+            self._default_soapheaders_context.reset(header_token)
 
     # Making an instance of Zeep client is a heavy task, as it involved downloading and parsing service and schema
     # definitions. To allow using same client instance with different authentication credentials, context variables
@@ -110,3 +112,18 @@ class SubmissionClient(EchoClient):
     service_url_production = (
         "https://eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRSubmissionServiceV1?wsdl"
     )
+
+
+class DueDiligenceStatementClientV3(EchoClient):
+    service_url_test = "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRDueDiligenceStatementServiceV3?wsdl"
+    service_url_production = "https://eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRDueDiligenceStatementServiceV3?wsdl"
+
+
+class SimplifiedDeclarationClientV3(EchoClient):
+    service_url_test = "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRSimplifiedDeclarationServiceV3?wsdl"
+    service_url_production = "https://eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRSimplifiedDeclarationServiceV3?wsdl"
+
+
+class VerifyDeclarationClientV3(EchoClient):
+    service_url_test = "https://acceptance.eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRVerifyDeclarationServiceV3?wsdl"
+    service_url_production = "https://eudr.webcloud.ec.europa.eu/tracesnt/ws/EUDRVerifyDeclarationServiceV3?wsdl"
