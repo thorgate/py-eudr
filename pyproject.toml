@@ -8,10 +8,9 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.8.6,<4.0"
 dependencies = [
-    "zeep (>=4.3.1,<=5.0.0)",
-    "xmlschema (>=3.4.3,<=4.0.0)",
-    "backports-zoneinfo[tzdata] (>=0.2.1,<0.3.0); python_version<'3.9'",
-    "backports-strenum (>=1.2.8,<2.0.0); python_version<'3.11'"
+    "zeep (>=4.3.1,<5)",
+    "lxml (>=4.6)",
+    "requests (>=2.7)",
 ]
 
 [tool.poetry]
@@ -21,7 +20,6 @@ packages = [{ include = "py_eudr" }]
 ruff = "*"
 pytest = "*"
 mypy = "*"
-lxml = "*"
 
 [tool.ruff]
 target-version = "py38"
@@ -40,6 +38,8 @@ ignore = ["UP006", "UP007", "UP035", "UP045"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Live tests call the acceptance environment; run them explicitly with `pytest -m live`.
+addopts = "-m 'not live'"
 markers = ["live: calls the EUDR acceptance environment (needs EUDR_USERNAME and EUDR_AUTHENTICATION_KEY)"]
 
 [tool.mypy]
