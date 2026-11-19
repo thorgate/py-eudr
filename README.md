@@ -61,11 +61,28 @@ with client.authenticated(username="...", authentication_key="...") as c:
     c.verify_declaration("<reference number>", "<verification number>")
 ```
 
-`authenticated()` keeps credentials in context variables, so one client instance (which is
-relatively expensive to build) can be shared between threads and asyncio tasks that use
-different credentials. `authenticate()` sets credentials for the current context instead.
+A client instance is relatively expensive to build, so build it once and share it.
+Credentials can be set in two ways:
+
+* `client.authenticate(username=..., authentication_key=...)` sets them on the instance;
+  every thread and task uses them. Nothing is stored in the current context.
+* `with client.authenticated(...)` sets them in the current context (thread or asyncio
+  task) only, overriding the instance credentials, so concurrent tasks can use different
+  credentials with one instance. Work handed to other threads sees them only when the
+  context is copied: `asyncio.to_thread` and `contextvars.copy_context().run(...)` do,
+  `loop.run_in_executor` and plain threads do not.
+
+A call without credentials raises `py_eudr.EUDRError` instead of sending an
+unauthenticated request.
 The `webServiceClientId` header defaults to `eudr-test` on acceptance and
 `eudr-repository` on production; pass `client_id=` to override it.
+
+Other constructor options: `operation_timeout` (seconds per SOAP call, default 60),
+`session` (a `requests.Session` shared by the service clients, for proxies, retries or
+connection pooling), `settings` (zeep `Settings`; the default `Settings(strict=False)`
+tolerates new optional elements in server responses) and `transport` (a zeep transport
+used as is; a plain `zeep.transports.Transport` loads the WSDL/XSD files from the network,
+`py_eudr.transport.make_transport()` builds the vendored one). `client.test` is read-only.
 
 ### Operations
 
@@ -105,27 +122,44 @@ them, but type checkers do not check dicts.
 Type checkers and IDEs see generated stubs (`py_eudr/types/v3.pyi`, `v4.pyi`): attribute
 and keyword argument names, `Literal` values of enumerations (e.g. `operator_role`,
 `activityType`, `status`) and which fields are optional. Runtime objects stay dynamic
-zeep objects.
+zeep objects. `py_eudr.types.v3` and `py_eudr.types.v4` are stub-only modules: import them
+under `if typing.TYPE_CHECKING:` for annotations, e.g. `statement: "v4.DueDiligenceStatementBaseType"`.
+
+Value conventions (zeep):
+
+* `base64Binary` fields (`geometryGeojson`) take the raw content as `bytes`, which zeep
+  base64-encodes, or an already base64-encoded `str`; they are returned decoded as `bytes`.
+* Decimal fields (`netWeight`, `percentageEstimationOrDeviation`, ...) are returned as
+  `Decimal`; pass `Decimal` or `str` values to avoid binary float rounding (`float` and
+  `int` are accepted too).
 
 ### Errors
 
 SOAP faults are raised as `zeep.exceptions.Fault`. Known EUDR faults are raised as
-subclasses with the error details in `.errors` (a list of `ErrorDetail(id, message, field)`):
+subclasses of `py_eudr.EUDRFault` (itself a `Fault` and a `py_eudr.EUDRError`) with the error
+details in `.errors` (a list of `ErrorDetail(id, message, field)`):
 
-* `py_eudr.ValidationError` (`BusinessRulesValidationException`)
+* `py_eudr.BusinessRulesError` (`BusinessRulesValidationException`)
 * `py_eudr.PermissionDeniedError` (`PermissionDeniedException`)
 * `py_eudr.NotFoundError` (`NotFoundException`)
 
 Requests that violate the XSD itself (e.g. a too long value) are rejected by the
 server's XML parser with a plain `Fault` (a `SAXParseException` message, no EUDR error
-details), not with `ValidationError`.
+details), not with `BusinessRulesError`.
+
+Errors outside the `EUDRError` hierarchy come from zeep and lxml:
+`zeep.exceptions.ValidationError` (a value zeep cannot serialize, raised before sending),
+`zeep.exceptions.TransportError` (non-SOAP HTTP error, e.g. a 503 page) and
+`zeep.exceptions.XMLSyntaxError`. To catch everything, use `except zeep.exceptions.Error`
+(which includes `EUDRFault`) together with `except py_eudr.EUDRError` (e.g. not
+authenticated) and `requests.RequestException` (connection errors, timeouts).
 
 ```python
-from py_eudr import ValidationError
+from py_eudr import BusinessRulesError
 
 try:
     client.submit_dds("OPERATOR", statement)
-except ValidationError as error:
+except BusinessRulesError as error:
     for detail in error.errors:
         print(detail.id, detail.message, detail.field)
 ```
@@ -167,18 +201,18 @@ pytest
 
 ```shell
 poetry install --with dev
-pytest                         # offline tests (network is blocked)
+pytest                         # offline tests (network is blocked, live tests deselected)
 ruff check . && ruff format --check .
 mypy py_eudr tests/typing/example.py
 ```
 
 The offline tests build every request through zeep, validate it against the vendored
 XSDs, and parse canned responses. Live smoke tests against the acceptance environment
-(echo, verify, SD permission check, one DDS submit/get/withdraw) run when credentials are
-set:
+(echo, verify, SD permission check, one DDS submit/get/withdraw) never run with plain
+`pytest`; select them with `-m live` and set credentials:
 
 ```shell
-EUDR_USERNAME=... EUDR_AUTHENTICATION_KEY=... pytest tests/live -v
+EUDR_USERNAME=... EUDR_AUTHENTICATION_KEY=... pytest -m live -v
 ```
 
 ## Integration test CLI
@@ -197,4 +231,5 @@ INFO:__main__:Echo response: User notsosecret, using third party system eudr-tes
 Other commands: `--submit-random`, `--retrieve UUID`, `--retract UUID` (DDS),
 `--submit-random-sd`, `--retrieve-sd UUID`, `--retract-sd UUID` (SD) and
 `--verify REFERENCE_NUMBER VERIFICATION_NUMBER`. `--v4` uses the V4 API (V3 is the
-default) and `--production` the production environment. See `python -m py_eudr --help`.
+default) and `--production` the production environment; submitting random data to
+production additionally requires `--allow-production-writes`. See `python -m py_eudr --help`.
