@@ -32,6 +32,11 @@ def main(args: t.Optional[t.Sequence[str]] = None) -> None:
         action="store_true",
         help="Use the production environment instead of acceptance",
     )
+    parser.add_argument(
+        "--allow-production-writes",
+        action="store_true",
+        help="Allow --submit-random/--submit-random-sd with --production",
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--echo", "-e", action="store_true")
     group.add_argument("--retrieve", "-r", metavar="UUID", help="Get a DDS overview")
@@ -51,6 +56,15 @@ def main(args: t.Optional[t.Sequence[str]] = None) -> None:
         help="Verify a DDS or SD",
     )
     options = parser.parse_args(args)
+    if (
+        options.production
+        and (options.submit_random or options.submit_random_sd)
+        and not options.allow_production_writes
+    ):
+        parser.error(
+            "refusing to submit random data to production without "
+            "--allow-production-writes"
+        )
 
     username = options.username or os.environ.get("EUDR_USERNAME", "")
     authentication_key = options.authentication_key or os.environ.get(
