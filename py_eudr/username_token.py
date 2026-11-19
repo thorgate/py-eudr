@@ -1,9 +1,10 @@
 import datetime
+import sys
 
-try:
+if sys.version_info >= (3, 9):
     import zoneinfo
-except ImportError:
-    from backports import zoneinfo  # type: ignore[no-redef]
+else:
+    from backports import zoneinfo
 
 from zeep.wsse.username import UsernameToken
 from zeep.wsse.utils import WSU, ensure_id

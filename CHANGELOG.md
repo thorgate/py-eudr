@@ -34,7 +34,6 @@
 
 ### Fixed
 * `authenticated()` now resets credentials when an exception is raised inside the context.
-* The CLI no longer base64-encodes GeoJSON twice.
 
 ## 0.1.0
 

@@ -116,6 +116,10 @@ subclasses with the error details in `.errors` (a list of `ErrorDetail(id, messa
 * `py_eudr.PermissionDeniedError` (`PermissionDeniedException`)
 * `py_eudr.NotFoundError` (`NotFoundException`)
 
+Requests that violate the XSD itself (e.g. a too long value) are rejected by the
+server's XML parser with a plain `Fault` (a `SAXParseException` message, no EUDR error
+details), not with `ValidationError`.
+
 ```python
 from py_eudr import ValidationError
 
@@ -126,12 +130,14 @@ except ValidationError as error:
         print(detail.id, detail.message, detail.field)
 ```
 
-### Business rules not visible in the schemas
+### Business rules and limits
 
 * DDS: `goodsMeasure.percentageEstimationOrDeviation` is required by the server
   (`EUDR-COMMODITIES-DESCRIPTOR-PERCENTAGE-ESTIMATION-MISSING`), although it is optional
   in the XSD.
-* V3 limits the SD `internalReferenceNumber` to 14 characters (V4: 50).
+* zeep does not check XSD facets (lengths, patterns) before sending; the server rejects
+  such requests. Note that V3 limits the SD `internalReferenceNumber` to 14 characters
+  (V4: 50).
 
 ### V3 and V4
 

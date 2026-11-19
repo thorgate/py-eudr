@@ -43,8 +43,7 @@ testpaths = ["tests"]
 markers = ["live: calls the EUDR acceptance environment (needs EUDR_USERNAME and EUDR_AUTHENTICATION_KEY)"]
 
 [tool.mypy]
-# mypy 2.x can not target 3.8; runtime 3.8 compatibility is covered by the tests.
-python_version = "3.10"
+# Checked against the running interpreter; mypy 1.x also supports --python-version 3.8.
 
 [[tool.mypy.overrides]]
 module = ["backports.*", "lxml.*", "zeep.*"]
