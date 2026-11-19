@@ -179,9 +179,9 @@ class GoodsMeasureType:
     def __init__(
         self,
         *,
-        percentageEstimationOrDeviation: DecimalThreePrecType | float | int | None = None,
-        netWeight: DecimalSixteenTotalSixPrecType | float | int | None = None,
-        supplementaryUnit: DecimalSixteenTotalSixPrecType | float | int | None = None,
+        percentageEstimationOrDeviation: DecimalThreePrecType | float | int | str | None = None,
+        netWeight: DecimalSixteenTotalSixPrecType | float | int | str | None = None,
+        supplementaryUnit: DecimalSixteenTotalSixPrecType | float | int | str | None = None,
         supplementaryUnitQualifier: SupplementaryUnitQualifierType | None = None,
     ) -> None: ...
 
@@ -622,8 +622,8 @@ class SdProducerLocationType:
     """
 
     geometryGeojson: bytes | None
-    postalAddress: list[SdProducerPostalAddressType]
-    cadastralIdentifier: list[str]
+    postalAddress: list[SdProducerPostalAddressType] | None
+    cadastralIdentifier: list[str] | None
     def __init__(
         self,
         *,

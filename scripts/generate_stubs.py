@@ -64,7 +64,7 @@ BUILTINS: t.Dict[str, t.Tuple[str, str]] = {
     "positiveInteger": ("int", ""),
     "unsignedInt": ("int", ""),
     "unsignedLong": ("int", ""),
-    "decimal": ("Decimal", "float | int"),
+    "decimal": ("Decimal", "float | int | str"),
     "double": ("float", ""),
     "float": ("float", ""),
     "dateTime": ("datetime", "str"),
@@ -231,6 +231,10 @@ class StubBuilder:
                     attr, param = f"list[{attr}]", f"Sequence[{param}]"
                     if optional:
                         param = f"{param} | None"
+                    # zeep returns [] for an absent list in a sequence, but None when
+                    # the enclosing choice/group is absent.
+                    if in_choice or optional_group:
+                        attr = f"{attr} | None"
                 elif optional:
                     attr, param = f"{attr} | None", f"{param} | None"
                 result.append((name, attr, param, optional))
