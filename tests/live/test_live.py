@@ -11,7 +11,7 @@ import time
 import pytest
 from payloads import dds_statement, sd_statement
 
-from py_eudr import ClientV3, ClientV4, PermissionDeniedError, ValidationError
+from py_eudr import ClientV3, ClientV4, PermissionDeniedError
 
 USERNAME = os.environ.get("EUDR_USERNAME", "")
 AUTHENTICATION_KEY = os.environ.get("EUDR_AUTHENTICATION_KEY", "")
@@ -42,10 +42,11 @@ def test_verify_unknown_declaration(live_client):
 
 
 def test_sd_submit_is_not_authorized(live_client):
-    with pytest.raises((PermissionDeniedError, ValidationError)) as excinfo:
+    with pytest.raises(PermissionDeniedError) as excinfo:
         live_client.submit_sd(
             "MICRO_OPERATOR",
-            sd_statement(live_client, f"PYEUDR-SD-{random.randint(10000, 99999)}"),
+            # V3 limits the SD internal reference number to 14 characters.
+            sd_statement(live_client, f"PYEUDR-{random.randint(10000, 99999)}"),
         )
     assert "not authorized" in str(excinfo.value)
 
