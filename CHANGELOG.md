@@ -27,10 +27,13 @@
 * The `--v3` CLI flag is removed (V3 is the default); the CLI logs through
   `logging.getLogger(__name__)` (`__main__` under `python -m py_eudr`).
 * `authenticate()` emits a `RuntimeWarning` when it replaces different credentials.
+  `authenticated()` emits one when instance credentials (`authenticate()`) are also set.
 * `get_sd` items must be a UUID, a `(uuid, version)` tuple or `[uuid, version]` list, a
   `UuidAndVersionNumberType` or a dict; anything else raises `TypeError`.
-* Responses that are not well-formed XML raise `MalformedResponseError` instead of being
-  repaired by zeep's lenient parser.
+* Responses that are not well-formed XML, and HTTP error responses whose XML body is not
+  a SOAP envelope, raise `MalformedResponseError` (with the HTTP status) instead of being
+  repaired by zeep's lenient parser; `Settings.xml_huge_tree` is honoured.
+* `py_eudr` declares `__all__`.
 * The `session` passed to a client is copied instead of modified; combining `session`
   with `transport` raises `ValueError`.
 

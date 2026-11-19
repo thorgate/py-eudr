@@ -76,6 +76,11 @@ Credentials can be set in two ways:
   `loop.run_in_executor` and plain threads do not. **For multi-tenant use (requests on
   behalf of different users), always use `authenticated()`.**
 
+Combining both is possible but easy to get wrong: inside `with authenticated(B)`, work
+dispatched to a thread that does not copy the context runs with the instance credentials
+`A` set by `authenticate()`, i.e. as the wrong user. `authenticated()` therefore emits a
+`RuntimeWarning` when instance credentials are set.
+
 A call without credentials raises `py_eudr.EUDRError` instead of sending an
 unauthenticated request; this also applies to zeep's `create_message()` on the service
 clients.
@@ -86,8 +91,10 @@ Other constructor options:
 
 * `operation_timeout`: seconds per SOAP call (default 60).
 * `session`: a `requests.Session` with the HTTP configuration (proxies, `verify`, `cert`,
-  `auth`, headers, cookies, mounted retry adapters). It is copied, never modified (zeep
-  changes its session); the copy is shared by the service clients.
+  `auth`, headers, cookies, hooks, `stream`, mounted retry adapters). It is copied, never
+  modified (zeep changes its session); the copy is shared by the service clients. The
+  copy is a plain `requests.Session` (behaviour of a `Session` subclass is lost) and zeep
+  sets its own `User-Agent` header.
 * `settings`: zeep `Settings`. The default `Settings(strict=False)` tolerates new optional
   elements in server responses. It also makes zeep's XML parser repair malformed XML, so
   the transport checks that every response is well-formed first and raises
@@ -165,10 +172,17 @@ Requests that violate the XSD itself (e.g. a too long value) are rejected by the
 server's XML parser with a plain `Fault` (a `SAXParseException` message, no EUDR error
 details), not with `BusinessRulesError`.
 
+Responses that zeep must not parse raise `py_eudr.MalformedResponseError`, which is both
+an `EUDRError` and a `zeep.exceptions.TransportError` (with `status_code` and `content`):
+a body that is not well-formed XML (e.g. truncated, or an HTML error page), or an HTTP
+error status (>= 400) with an XML body that is not a SOAP envelope (e.g. an XHTML error
+page). These checks are done by the default transport; empty bodies are left to zeep.
+
 Errors outside the `EUDRError` hierarchy come from zeep and lxml:
 `zeep.exceptions.ValidationError` (a value zeep cannot serialize, raised before sending),
-`zeep.exceptions.TransportError` (non-SOAP HTTP error, e.g. a 503 page) and
-`zeep.exceptions.XMLSyntaxError`. To catch everything, use `except zeep.exceptions.Error`
+other `zeep.exceptions.TransportError`s (zeep's own handling of non-SOAP responses) and
+`zeep.exceptions.XMLSyntaxError` (e.g. XML without a SOAP envelope with a success
+status). To catch everything, use `except zeep.exceptions.Error`
 (which includes `EUDRFault`) together with `except py_eudr.EUDRError` (e.g. not
 authenticated) and `requests.RequestException` (connection errors, timeouts).
 
