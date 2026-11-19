@@ -172,6 +172,8 @@ class FakeServer:
     def __init__(self) -> None:
         self.sent: t.List[Sent] = []
         self.overrides: t.Dict[str, t.Tuple[int, str]] = {}
+        # request element -> (HTTP status, content type, raw body)
+        self.raw_responses: t.Dict[str, t.Tuple[int, str, bytes]] = {}
 
     @property
     def last(self) -> Sent:
@@ -182,6 +184,13 @@ class FakeServer:
         self.sent.append(sent)
         version = "v4" if address.endswith("V4") else "v3"
         request = etree.QName(sent.body).localname
+        if request in self.raw_responses:
+            status, content_type, content = self.raw_responses[request]
+            response = requests.Response()
+            response.status_code = status
+            response._content = content
+            response.headers["Content-Type"] = content_type
+            return response
         status, body = self.overrides.get(request) or responses(version)[request]
         body = body.format(**namespaces(version))
         xml = (
@@ -232,8 +241,11 @@ def client_v4() -> ClientV4:
 
 
 @pytest.fixture(params=["v3", "v4"])
-def client(request: pytest.FixtureRequest) -> t.Any:
-    return request.getfixturevalue(f"client_{request.param}")
+def client(request: pytest.FixtureRequest) -> t.Iterator[t.Any]:
+    """ClientV3 / ClientV4, authenticated (in the test's context) as user/key."""
+    instance = request.getfixturevalue(f"client_{request.param}")
+    with instance.authenticated(username="user", authentication_key="key"):
+        yield instance
 
 
 class _VendoredResolver(etree.Resolver):

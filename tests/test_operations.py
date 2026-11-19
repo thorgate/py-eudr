@@ -5,6 +5,7 @@ import datetime
 import typing as t
 
 import pytest
+import zeep.exceptions
 from conftest import (
     BASE,
     EUDR,
@@ -21,7 +22,14 @@ from lxml import etree
 from payloads import GEOJSON, dds_statement, sd_statement
 from zeep.exceptions import Fault
 
-from py_eudr import BodyIdentity, NotFoundError, ValidationError
+from py_eudr import (
+    BodyIdentity,
+    BusinessRulesError,
+    EUDRError,
+    EUDRFault,
+    NotFoundError,
+    PermissionDeniedError,
+)
 
 SERVICES = {
     "echo": ("EudrEchoService", "3"),
@@ -236,7 +244,7 @@ def test_business_rule_fault(client, server):
             "EUDR-COMMODITIES-DESCRIPTOR-PERCENTAGE-ESTIMATION-MISSING",
         ),
     )
-    with pytest.raises(ValidationError) as excinfo:
+    with pytest.raises(BusinessRulesError) as excinfo:
         client.submit_dds("OPERATOR", dds_statement(client))
     error = excinfo.value
     assert isinstance(error, Fault)
@@ -270,3 +278,48 @@ def test_schema_validation_detects_invalid_requests():
     )
     with pytest.raises(AssertionError):
         assert_valid(xml_schema("EUDRDueDiligenceStatementServiceV3", "4"), element)
+
+
+@pytest.mark.parametrize(
+    "fault_element,exception_class",
+    [
+        ("BusinessRulesValidationException", BusinessRulesError),
+        ("PermissionDeniedException", PermissionDeniedError),
+        ("NotFoundException", NotFoundError),
+    ],
+)
+def test_fault_mapping(client, server, fault_element, exception_class):
+    server.overrides["SubmitDdsRequest"] = (
+        500,
+        fault(fault_element, "dds", "Rejected", "EUDR-ERROR-1"),
+    )
+    with pytest.raises(exception_class) as excinfo:
+        client.submit_dds("OPERATOR", dds_statement(client))
+    assert isinstance(excinfo.value, EUDRFault)
+    assert isinstance(excinfo.value, EUDRError)
+    assert isinstance(excinfo.value, Fault)
+    assert excinfo.value.errors[0].id == "EUDR-ERROR-1"
+
+
+def test_non_soap_error_response(client, server):
+    server.raw_responses["GetDdsRequest"] = (
+        503,
+        "text/html",
+        b"<html><body>Service Unavailable</body></html>",
+    )
+    with pytest.raises(zeep.exceptions.Error) as excinfo:
+        client.get_dds([UUID])
+    assert not isinstance(excinfo.value, EUDRFault)
+
+
+@pytest.mark.parametrize("method", ["get_dds", "get_sd"])
+def test_get_rejects_a_single_string(client, server, method):
+    with pytest.raises(TypeError):
+        getattr(client, method)(UUID)
+    assert server.sent == []
+
+
+@pytest.mark.parametrize("method", ["get_dds", "get_sd"])
+def test_get_with_no_uuids(client, server, method):
+    assert getattr(client, method)([]) == []
+    assert server.sent == []
