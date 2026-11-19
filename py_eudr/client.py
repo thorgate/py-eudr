@@ -2,7 +2,10 @@ import typing as t
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 
+import requests
 from zeep.exceptions import Fault
+from zeep.settings import Settings
+from zeep.transports import Transport
 
 from py_eudr.base import (
     DueDiligenceStatementClientV3,
@@ -13,8 +16,10 @@ from py_eudr.base import (
     SimplifiedDeclarationClientV4,
     VerifyDeclarationClientV3,
     VerifyDeclarationClientV4,
+    default_settings,
 )
 from py_eudr.exceptions import translate_fault
+from py_eudr.transport import make_transport
 
 if t.TYPE_CHECKING:
     from py_eudr.types import v3, v4
@@ -84,6 +89,12 @@ def _soapheaders(body_identity: BodyIdentityArg) -> t.Dict[str, t.Any]:
     return {"_soapheaders": {"bodyIdentity": body_identity.to_header()}}
 
 
+def _as_list(items: t.Any) -> t.List[t.Any]:
+    if isinstance(items, (str, bytes)):
+        raise TypeError("Expected a sequence of UUIDs, not a single string")
+    return list(items)
+
+
 def _uuid_and_version(item: t.Any) -> t.Any:
     if isinstance(item, str):
         return {"uuid": item}
@@ -104,18 +115,50 @@ class _VersionedClient:
     sd_client_class: t.Type[ServiceClient]
     verify_client_class: t.Type[ServiceClient]
 
-    def __init__(self, *, test: bool = True, vendored_schemas: bool = True):
-        self.test = test
-        self.echo_client = EchoClient(test=test, vendored_schemas=vendored_schemas)
-        self.dds_client = self.dds_client_class(
-            test=test, vendored_schemas=vendored_schemas
-        )
-        self.sd_client = self.sd_client_class(
-            test=test, vendored_schemas=vendored_schemas
-        )
-        self.verify_client = self.verify_client_class(
-            test=test, vendored_schemas=vendored_schemas
-        )
+    def __init__(
+        self,
+        *,
+        test: bool = True,
+        vendored_schemas: bool = True,
+        operation_timeout: t.Optional[float] = 60,
+        timeout: float = 300,
+        session: t.Optional[requests.Session] = None,
+        transport: t.Optional[Transport] = None,
+        settings: t.Optional[Settings] = None,
+    ):
+        """
+        :param test: use the acceptance environment (``False``: production).
+        :param vendored_schemas: load WSDL/XSD files from the package (default) or,
+            with ``False``, from the server.
+        :param operation_timeout: timeout of SOAP calls in seconds.
+        :param timeout: timeout of loading WSDL/XSD files (``vendored_schemas=False``).
+        :param session: :class:`requests.Session` shared by the four service clients
+            (one is created when omitted).
+        :param transport: zeep transport shared by the service clients, replacing
+            ``vendored_schemas``, ``operation_timeout``, ``timeout`` and ``session``.
+            A plain :class:`zeep.transports.Transport` loads the definitions from the
+            network; use :func:`py_eudr.transport.make_transport` to keep vendored ones.
+        :param settings: zeep settings; defaults to ``Settings(strict=False)`` so that
+            new optional elements in responses are tolerated.
+        """
+        self._test = test
+        if transport is None:
+            transport = make_transport(
+                vendored_schemas=vendored_schemas,
+                timeout=timeout,
+                operation_timeout=operation_timeout,
+                session=session or requests.Session(),
+            )
+        self.transport = transport
+        options: t.Dict[str, t.Any] = {
+            "test": test,
+            "transport": transport,
+            "settings": settings or default_settings(),
+        }
+        self.echo_client = EchoClient(**options)
+        self.dds_client = self.dds_client_class(**options)
+        self.sd_client = self.sd_client_class(**options)
+        self.verify_client = self.verify_client_class(**options)
 
         # Types are kept per service, as merging them would silently replace same-named types from other services.
         self.types: t.Any = type(
@@ -127,6 +170,11 @@ class _VersionedClient:
                 "verify": _collect_types(self.verify_client),
             },
         )
+
+    @property
+    def test(self) -> bool:
+        """``True`` for the acceptance environment (read-only)."""
+        return self._test
 
     @property
     def _clients(self) -> t.Tuple[ServiceClient, ...]:
@@ -246,10 +294,13 @@ class _VersionedClient:
         self, uuids: t.Sequence[str], *, body_identity: BodyIdentityArg = None
     ) -> t.List[t.Any]:
         """Return the overview (status, reference and verification number) of DDSs."""
+        uuids = _as_list(uuids)
+        if not uuids:
+            return []
         result = self._call(
             self.dds_client,
             "getDds",
-            uuidList=list(uuids),
+            uuidList=uuids,
             **_soapheaders(body_identity),
         )
         return list(result or [])
@@ -345,6 +396,9 @@ class _VersionedClient:
         Each item is a UUID string, a ``(uuid, version_number)`` tuple, or a
         ``UuidAndVersionNumberType``/dict.
         """
+        uuids = _as_list(uuids)
+        if not uuids:
+            return []
         result = self._call(
             self.sd_client,
             "getSd",

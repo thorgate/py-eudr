@@ -5,9 +5,12 @@ import typing as t
 from contextlib import contextmanager
 
 from zeep import Client as ZeepClient
+from zeep import Plugin
+from zeep.settings import Settings
 from zeep.transports import Transport
 
-from py_eudr.transport import VendoredSchemaTransport
+from py_eudr.exceptions import EUDRError
+from py_eudr.transport import make_transport
 from py_eudr.username_token import EUDRUsernameToken
 
 ACCEPTANCE_HOST = "acceptance.eudr.webcloud.ec.europa.eu"
@@ -20,6 +23,29 @@ def service_address(service_name: str, *, test: bool) -> str:
     return f"https://{host}/tracesnt/ws/{service_name}"
 
 
+def default_settings() -> Settings:
+    """zeep settings used by default: tolerate unknown elements in responses, so an
+    optional element added by the server does not break every call."""
+    return Settings(strict=False)
+
+
+class _RequireAuthentication(Plugin):
+    """Refuse to send a request without WS-Security credentials."""
+
+    def __init__(self, client: ServiceClient) -> None:
+        self.client = client
+
+    def egress(self, envelope, http_headers, operation, binding_options):
+        if self.client.wsse is None:
+            raise EUDRError(
+                "Client is not authenticated: use authenticate() or authenticated()"
+            )
+        return envelope, http_headers
+
+
+_NOT_SET: t.Any = object()
+
+
 class ServiceClient(ZeepClient):
     """Zeep client of a single EUDR web service.
 
@@ -28,7 +54,13 @@ class ServiceClient(ZeepClient):
     production endpoint regardless of the ``soap:address`` in the WSDL.
 
     Pass ``vendored_schemas=False`` to load the definitions from the live server
-    instead, e.g. to debug a schema drift.
+    instead, e.g. to debug a schema drift. A ``transport`` given explicitly is used
+    as is: a plain :class:`zeep.transports.Transport` loads the definitions from the
+    network; use :func:`py_eudr.transport.make_transport` to configure the vendored one.
+
+    Credentials: :meth:`authenticate` sets them on the instance (used by all threads
+    and tasks); :meth:`authenticated` overrides them in the current context only.
+    Calls without credentials raise :class:`py_eudr.exceptions.EUDRError`.
     """
 
     service_name: str = ""
@@ -40,25 +72,45 @@ class ServiceClient(ZeepClient):
         test: bool = True,
         vendored_schemas: bool = True,
         transport: t.Optional[Transport] = None,
+        settings: t.Optional[Settings] = None,
     ):
         if service_name is not None:
             self.service_name = service_name
         if not self.service_name:
             raise ValueError("service_name is required")
-        self.test = test
-        self._wsse_context: contextvars.ContextVar[t.Optional[EUDRUsernameToken]] = (
-            contextvars.ContextVar("_wsse_context", default=None)
+        self._test = test
+        # Instance level credentials (authenticate()) and context overrides (authenticated()).
+        # The context variables are only set inside authenticated(), never on construction.
+        self._instance_wsse: t.Optional[EUDRUsernameToken] = None
+        self._instance_soapheaders: t.Optional[t.Dict[str, str]] = None
+        self._wsse_context: contextvars.ContextVar[t.Any] = contextvars.ContextVar(
+            f"eudr_wsse_{id(self)}", default=_NOT_SET
         )
-        self._default_soapheaders_context: contextvars.ContextVar[
-            t.Optional[t.Dict[str, str]]
-        ] = contextvars.ContextVar("_default_soapheaders_context", default=None)
+        self._soapheaders_context: contextvars.ContextVar[t.Any] = (
+            contextvars.ContextVar(f"eudr_soapheaders_{id(self)}", default=_NOT_SET)
+        )
         if transport is None:
-            transport = VendoredSchemaTransport() if vendored_schemas else Transport()
-        super().__init__(f"{self.address}?wsdl", transport=transport)
+            transport = make_transport(vendored_schemas=vendored_schemas)
+        super().__init__(
+            f"{self.address}?wsdl",
+            transport=transport,
+            settings=settings or default_settings(),
+            plugins=[_RequireAuthentication(self)],
+        )
 
         # The vendored WSDL points at acceptance; always bind to the selected environment.
-        port = self._get_port(self._get_service(None), None)
-        self._default_service = self.create_service(port.binding.name, self.address)
+        (service,) = self.wsdl.services.values()
+        (port,) = service.ports.values()
+        self._bound_service = self.create_service(port.binding.name, self.address)
+
+    @property
+    def service(self):
+        """The service proxy bound to the acceptance or production address."""
+        return self._bound_service
+
+    @property
+    def test(self) -> bool:
+        return self._test
 
     @property
     def address(self) -> str:
@@ -80,11 +132,12 @@ class ServiceClient(ZeepClient):
         authentication_key: str,
         client_id: t.Optional[str] = None,
     ):
-        """Authenticate the client with a new username and authentication key."""
-        self.wsse = EUDRUsernameToken(
-            username,
-            authentication_key,
-        )
+        """Set the credentials of this client instance (all threads and tasks).
+
+        Nothing is stored in the current context; :meth:`authenticated` blocks
+        override these credentials.
+        """
+        self.wsse = EUDRUsernameToken(username, authentication_key)
         self.set_default_soapheaders(
             {"webServiceClientId": self.get_client_id(client_id)},
         )
@@ -97,40 +150,44 @@ class ServiceClient(ZeepClient):
         authentication_key: str,
         client_id: t.Optional[str] = None,
     ):
-        """Provide a thread and async safe client authenticated with given credentials."""
+        """Use the given credentials in the current context (thread or asyncio task).
+
+        Code run in another thread does not see them unless the context is copied
+        (``asyncio.to_thread`` and ``contextvars.copy_context().run`` do,
+        ``run_in_executor`` and plain threads do not).
+        """
         wsse_token = self._wsse_context.set(
-            EUDRUsernameToken(
-                username,
-                authentication_key,
-            )
+            EUDRUsernameToken(username, authentication_key)
         )
-        header_token = self._default_soapheaders_context.set(
+        header_token = self._soapheaders_context.set(
             {"webServiceClientId": self.get_client_id(client_id)}
         )
         try:
             yield self
         finally:
             self._wsse_context.reset(wsse_token)
-            self._default_soapheaders_context.reset(header_token)
+            self._soapheaders_context.reset(header_token)
 
-    # To allow using the same client instance with different authentication credentials, context variables are
-    # used together with the `authenticated` context manager.
+    # zeep reads `wsse` and `_default_soapheaders` on every call; assignments (including
+    # the ones in zeep's constructor) go to the instance level.
 
     @property
     def wsse(self):
-        return self._wsse_context.get()
+        value = self._wsse_context.get()
+        return self._instance_wsse if value is _NOT_SET else value
 
     @wsse.setter
     def wsse(self, value):
-        self._wsse_context.set(value)
+        self._instance_wsse = value
 
     @property
     def _default_soapheaders(self):
-        return self._default_soapheaders_context.get()
+        value = self._soapheaders_context.get()
+        return self._instance_soapheaders if value is _NOT_SET else value
 
     @_default_soapheaders.setter
     def _default_soapheaders(self, value):
-        self._default_soapheaders_context.set(value)
+        self._instance_soapheaders = value
 
 
 class EchoClient(ServiceClient):
