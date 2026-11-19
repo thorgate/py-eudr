@@ -19,6 +19,7 @@ from py_eudr.base import (
     VerifyDeclarationClientV3,
     VerifyDeclarationClientV4,
     default_settings,
+    warn_on_mixed_credentials,
     warn_on_replaced_credentials,
 )
 from py_eudr.exceptions import translate_fault
@@ -231,8 +232,12 @@ class _VersionedClient:
         """Use the given credentials inside the ``with`` block (thread and async safe).
 
         Credentials are kept in context variables, so one client instance can be shared
-        between threads and asyncio tasks using different credentials.
+        between threads and asyncio tasks using different credentials. Threads that
+        do not copy the context (``run_in_executor``, plain threads) use the instance
+        credentials set by :meth:`authenticate` instead; a :class:`RuntimeWarning` is
+        emitted when those are set.
         """
+        warn_on_mixed_credentials(self.echo_client)
         return self._authenticated(
             username=username,
             authentication_key=authentication_key,
@@ -250,7 +255,7 @@ class _VersionedClient:
         with ExitStack() as stack:
             for client in self._clients:
                 stack.enter_context(
-                    client.authenticated(
+                    client._authenticated_context(
                         username=username,
                         authentication_key=authentication_key,
                         client_id=client_id,

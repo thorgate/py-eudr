@@ -11,7 +11,7 @@ from zeep.settings import Settings
 from zeep.transports import Transport
 
 from py_eudr.exceptions import EUDRError
-from py_eudr.transport import make_transport
+from py_eudr.transport import WellFormedResponseTransport, make_transport
 from py_eudr.username_token import EUDRUsernameToken
 
 ACCEPTANCE_HOST = "acceptance.eudr.webcloud.ec.europa.eu"
@@ -50,6 +50,19 @@ def warn_on_replaced_credentials(
         warnings.warn(
             "authenticate() replaces the credentials shared by all threads; use "
             "authenticated() for requests on behalf of different users",
+            RuntimeWarning,
+            stacklevel=stacklevel,
+        )
+
+
+def warn_on_mixed_credentials(client: ServiceClient, stacklevel: int = 3) -> None:
+    """Warn when :meth:`ServiceClient.authenticated` is used on a client that also
+    has instance credentials (set by :meth:`ServiceClient.authenticate`)."""
+    if client._instance_wsse is not None:
+        warnings.warn(
+            "authenticated() credentials only apply to the current context; worker "
+            "threads without a copied context will use the instance credentials set "
+            "by authenticate()",
             RuntimeWarning,
             stacklevel=stacklevel,
         )
@@ -118,12 +131,15 @@ class ServiceClient(ZeepClient):
         self._soapheaders_context: contextvars.ContextVar[t.Any] = (
             contextvars.ContextVar(f"eudr_soapheaders_{id(self)}", default=_NOT_SET)
         )
+        settings = settings or default_settings()
         if transport is None:
             transport = make_transport(vendored_schemas=vendored_schemas)
+        if isinstance(transport, WellFormedResponseTransport):
+            transport.xml_huge_tree = settings.xml_huge_tree
         super().__init__(
             f"{self.address}?wsdl",
             transport=transport,
-            settings=settings or default_settings(),
+            settings=settings,
             plugins=[_RequireAuthentication(self), *plugins],
         )
 
@@ -199,20 +215,36 @@ class ServiceClient(ZeepClient):
             {"webServiceClientId": self.get_client_id(client_id)},
         )
 
-    @contextmanager
     def authenticated(
         self,
         *,
         username: str,
         authentication_key: str,
         client_id: t.Optional[str] = None,
-    ):
+    ) -> t.ContextManager[ServiceClient]:
         """Use the given credentials in the current context (thread or asyncio task).
 
         Code run in another thread does not see them unless the context is copied
         (``asyncio.to_thread`` and ``contextvars.copy_context().run`` do,
-        ``run_in_executor`` and plain threads do not).
+        ``run_in_executor`` and plain threads do not); such code uses the instance
+        credentials set by :meth:`authenticate`, if any, so a
+        :class:`RuntimeWarning` is emitted when those are set.
         """
+        warn_on_mixed_credentials(self)
+        return self._authenticated_context(
+            username=username,
+            authentication_key=authentication_key,
+            client_id=client_id,
+        )
+
+    @contextmanager
+    def _authenticated_context(
+        self,
+        *,
+        username: str,
+        authentication_key: str,
+        client_id: t.Optional[str] = None,
+    ) -> t.Iterator[ServiceClient]:
         wsse_token = self._wsse_context.set(
             EUDRUsernameToken(username, authentication_key)
         )

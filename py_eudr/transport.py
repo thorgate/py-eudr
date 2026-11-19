@@ -85,8 +85,10 @@ def copy_session(session: requests.Session) -> requests.Session:
     zeep's transport modifies its session (mounts a ``file://`` adapter and sets the
     ``User-Agent`` header), so the caller's session is never used directly. Proxies,
     TLS settings (``verify``, ``cert``), ``auth``, headers, cookies, parameters,
-    redirect and environment settings and mounted adapters (e.g. retries) are copied;
-    adapters are shared, so connection pools are reused.
+    hooks, ``stream``, redirect and environment settings and mounted adapters (e.g.
+    retries) are copied; adapters are shared, so connection pools are reused.
+    The copy is a plain :class:`requests.Session`: behaviour of a ``Session`` subclass
+    (overridden methods) is not kept, and zeep sets its own ``User-Agent`` header.
     """
     copy = requests.Session()
     copy.headers.update(session.headers)
@@ -98,6 +100,8 @@ def copy_session(session: requests.Session) -> requests.Session:
     copy.auth = session.auth
     copy.trust_env = session.trust_env
     copy.max_redirects = session.max_redirects
+    copy.stream = session.stream
+    copy.hooks = {event: list(hooks) for event, hooks in session.hooks.items()}
     for prefix, adapter in session.adapters.items():
         copy.mount(prefix, adapter)
     return copy
@@ -109,6 +113,7 @@ def make_transport(
     timeout: float = 300,
     operation_timeout: t.Optional[float] = 60,
     session: t.Optional[requests.Session] = None,
+    xml_huge_tree: bool = False,
 ) -> Transport:
     """Build the transport used by the EUDR clients.
 
@@ -124,35 +129,66 @@ def make_transport(
         timeout=timeout,
         operation_timeout=operation_timeout,
         session=copy_session(session) if session is not None else None,
+        xml_huge_tree=xml_huge_tree,
     )
 
 
-def check_well_formed(response: requests.Response) -> None:
-    """Raise :class:`MalformedResponseError` unless the body is well-formed XML.
+SOAP_ENVELOPES = frozenset(
+    {
+        "{http://schemas.xmlsoap.org/soap/envelope/}Envelope",
+        "{http://www.w3.org/2003/05/soap-envelope}Envelope",
+    }
+)
 
-    zeep parses responses with lxml's recover mode when ``Settings(strict=False)`` is
-    used, which would silently repair a truncated response (e.g. drop list items).
+
+def check_response(response: requests.Response, *, huge_tree: bool = False) -> None:
+    """Raise :class:`MalformedResponseError` for responses zeep must not parse.
+
+    * The body is not well-formed XML. zeep parses responses with lxml's recover mode
+      when ``Settings(strict=False)`` is used, which would silently repair e.g. a
+      truncated response (dropping list items).
+    * An HTTP error status (>= 400) whose body is XML but not a SOAP envelope (e.g. an
+      XHTML error page).
+
+    Empty bodies (e.g. 202/204) are left to zeep.
     """
+    if not response.content or not response.content.strip():
+        return
     parser = etree.XMLParser(
-        recover=False, resolve_entities=False, no_network=True, huge_tree=False
+        recover=False, resolve_entities=False, no_network=True, huge_tree=huge_tree
     )
     try:
-        etree.fromstring(response.content, parser)
+        root = etree.fromstring(response.content, parser)
     except etree.XMLSyntaxError as exc:
         raise MalformedResponseError(
-            f"Response is not well-formed XML: {exc}",
+            f"HTTP {response.status_code} response is not well-formed XML: {exc}",
             status_code=response.status_code,
             content=response.content,
         ) from exc
+    if response.status_code >= 400 and root.tag not in SOAP_ENVELOPES:
+        raise MalformedResponseError(
+            f"HTTP {response.status_code} response is not a SOAP message "
+            f"(root element {root.tag})",
+            status_code=response.status_code,
+            content=response.content,
+        )
 
 
 class WellFormedResponseTransport(Transport):
-    """A :class:`zeep.transports.Transport` that rejects responses that are not
-    well-formed XML (see :func:`check_well_formed`)."""
+    """A :class:`zeep.transports.Transport` that rejects malformed responses (see
+    :func:`check_response`).
+
+    :param xml_huge_tree: allow very large XML documents, like zeep's
+        ``Settings.xml_huge_tree`` (the clients copy it from their settings).
+    """
+
+    def __init__(self, *args: t.Any, xml_huge_tree: bool = False, **kwargs: t.Any):
+        super().__init__(*args, **kwargs)
+        self.xml_huge_tree = xml_huge_tree
 
     def post_xml(self, address, envelope, headers):
         response = super().post_xml(address, envelope, headers)
-        check_well_formed(response)
+        check_response(response, huge_tree=self.xml_huge_tree)
         return response
 
 
