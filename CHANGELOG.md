@@ -25,7 +25,14 @@
   `backports-strenum` and `backports-zoneinfo` are dropped.
 * Live tests are deselected by default (`pytest -m live` runs them).
 * The `--v3` CLI flag is removed (V3 is the default); the CLI logs through
-  `logging.getLogger("py_eudr.__main__")`.
+  `logging.getLogger(__name__)` (`__main__` under `python -m py_eudr`).
+* `authenticate()` emits a `RuntimeWarning` when it replaces different credentials.
+* `get_sd` items must be a UUID, a `(uuid, version)` tuple or `[uuid, version]` list, a
+  `UuidAndVersionNumberType` or a dict; anything else raises `TypeError`.
+* Responses that are not well-formed XML raise `MalformedResponseError` instead of being
+  repaired by zeep's lenient parser.
+* The `session` passed to a client is copied instead of modified; combining `session`
+  with `transport` raises `ValueError`.
 
 ### Added
 * `ClientV4` for the EUDR V4 API.
@@ -38,8 +45,9 @@
   `scripts/generate_stubs.py`), typed client methods and a `py.typed` marker.
 * `BodyIdentity` helper for the `BodyIdentity` SOAP header.
 * Client options `operation_timeout`, `timeout`, `session` (shared by the service clients),
-  `transport` and `settings`.
-* CLI: `--v4`, `--production` (writes need `--allow-production-writes`), SD commands (`--submit-random-sd`, `--retrieve-sd`,
+  `transport`, `settings` and `plugins`.
+* CLI: `--v4`, `--production` (submit/withdraw need `--allow-production-writes`; empty
+  credentials are rejected), SD commands (`--submit-random-sd`, `--retrieve-sd`,
   `--retract-sd`) and `--verify`. Random DDS/SD set `percentageEstimationOrDeviation`,
   which the server requires.
 * Offline test-suite (requests validated against the vendored XSDs) and optional live

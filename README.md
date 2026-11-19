@@ -65,24 +65,42 @@ A client instance is relatively expensive to build, so build it once and share i
 Credentials can be set in two ways:
 
 * `client.authenticate(username=..., authentication_key=...)` sets them on the instance;
-  every thread and task uses them. Nothing is stored in the current context.
+  every thread and task uses them. Nothing is stored in the current context. Use it for a
+  single set of credentials: replacing them while other requests run would send those
+  requests with the new credentials, so `authenticate()` emits a `RuntimeWarning` when
+  different credentials replace already-set ones.
 * `with client.authenticated(...)` sets them in the current context (thread or asyncio
   task) only, overriding the instance credentials, so concurrent tasks can use different
   credentials with one instance. Work handed to other threads sees them only when the
   context is copied: `asyncio.to_thread` and `contextvars.copy_context().run(...)` do,
-  `loop.run_in_executor` and plain threads do not.
+  `loop.run_in_executor` and plain threads do not. **For multi-tenant use (requests on
+  behalf of different users), always use `authenticated()`.**
 
 A call without credentials raises `py_eudr.EUDRError` instead of sending an
-unauthenticated request.
+unauthenticated request; this also applies to zeep's `create_message()` on the service
+clients.
 The `webServiceClientId` header defaults to `eudr-test` on acceptance and
 `eudr-repository` on production; pass `client_id=` to override it.
 
-Other constructor options: `operation_timeout` (seconds per SOAP call, default 60),
-`session` (a `requests.Session` shared by the service clients, for proxies, retries or
-connection pooling), `settings` (zeep `Settings`; the default `Settings(strict=False)`
-tolerates new optional elements in server responses) and `transport` (a zeep transport
-used as is; a plain `zeep.transports.Transport` loads the WSDL/XSD files from the network,
-`py_eudr.transport.make_transport()` builds the vendored one). `client.test` is read-only.
+Other constructor options:
+
+* `operation_timeout`: seconds per SOAP call (default 60).
+* `session`: a `requests.Session` with the HTTP configuration (proxies, `verify`, `cert`,
+  `auth`, headers, cookies, mounted retry adapters). It is copied, never modified (zeep
+  changes its session); the copy is shared by the service clients.
+* `settings`: zeep `Settings`. The default `Settings(strict=False)` tolerates new optional
+  elements in server responses. It also makes zeep's XML parser repair malformed XML, so
+  the transport checks that every response is well-formed first and raises
+  `py_eudr.exceptions.MalformedResponseError` (an `EUDRError` and a zeep `TransportError`)
+  for e.g. truncated responses.
+* `transport`: a zeep transport used as is (not combinable with `session`). A plain
+  `zeep.transports.Transport` loads the WSDL/XSD files from the network and skips the
+  well-formedness check; `py_eudr.transport.make_transport()` builds the default one.
+* `plugins`: zeep plugins, applied after the authentication check.
+
+`client.test` is read-only. The service clients (`client.dds_client`, ...) are bound to
+the selected environment: `service` and `bind()` use the acceptance or production
+address, never the address in the vendored WSDL.
 
 ### Operations
 

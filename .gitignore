@@ -30,3 +30,5 @@ dmypy.json
 
 # PyPI configuration file
 .pypirc
+# Local credentials for live tests
+.secrets/

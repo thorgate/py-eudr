@@ -43,7 +43,8 @@ addopts = "-m 'not live'"
 markers = ["live: calls the EUDR acceptance environment (needs EUDR_USERNAME and EUDR_AUTHENTICATION_KEY)"]
 
 [tool.mypy]
-# Checked against the running interpreter; mypy 1.x also supports --python-version 3.8.
+# Checked against the running interpreter. mypy 2.x can not target Python 3.8;
+# mypy 1.x can (--python-version 3.8).
 
 [[tool.mypy.overrides]]
 module = ["backports.*", "lxml.*", "zeep.*"]
