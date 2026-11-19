@@ -1,0 +1,37 @@
+<?xml version='1.0' encoding='UTF-8'?><!-- Published by JAX-WS RI (https://github.com/eclipse-ee4j/metro-jax-ws). RI's version is JAX-WS RI 3.0.2 git-revision#91dd558. --><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:echo="http://ec.europa.eu/tracesnt/eudr/echo" targetNamespace="http://ec.europa.eu/tracesnt/eudr/echo" elementFormDefault="qualified">
+
+    <xs:element name="EudrEchoRequest" type="echo:EudrEchoRequestType"/>
+    <xs:element name="EudrEchoResponse" type="echo:EudrEchoResponseType"/>
+    <xs:element name="EudrEchoServiceFault" type="echo:EudrEchoServiceFault"/>
+
+
+    <xs:complexType name="EudrEchoRequestType">
+        <xs:sequence>
+            <xs:element name="query" type="xs:string" maxOccurs="1" minOccurs="1"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="EudrEchoResponseType">
+        <xs:sequence>
+            <xs:element name="status" type="xs:string" maxOccurs="1" minOccurs="1"/>
+        </xs:sequence>
+    </xs:complexType>
+
+    <xs:complexType name="EudrEchoServiceFault">
+        <xs:annotation>
+            <xs:documentation>
+                Default EUDR WS Response. Error Message.
+            </xs:documentation>
+        </xs:annotation>
+        <xs:sequence>
+            <xs:element name="errorMessage" type="xs:string" minOccurs="0" maxOccurs="1">
+                <xs:annotation>
+                    <xs:documentation>
+                        Generated error message during process.
+                    </xs:documentation>
+                </xs:annotation>
+            </xs:element>
+        </xs:sequence>
+    </xs:complexType>
+
+</xs:schema>
