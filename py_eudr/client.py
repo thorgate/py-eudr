@@ -1,8 +1,10 @@
 import typing as t
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from typing import Mapping
 
 import requests
+from zeep import Plugin
 from zeep.exceptions import Fault
 from zeep.settings import Settings
 from zeep.transports import Transport
@@ -17,6 +19,7 @@ from py_eudr.base import (
     VerifyDeclarationClientV3,
     VerifyDeclarationClientV4,
     default_settings,
+    warn_on_replaced_credentials,
 )
 from py_eudr.exceptions import translate_fault
 from py_eudr.transport import make_transport
@@ -98,10 +101,15 @@ def _as_list(items: t.Any) -> t.List[t.Any]:
 def _uuid_and_version(item: t.Any) -> t.Any:
     if isinstance(item, str):
         return {"uuid": item}
-    if isinstance(item, tuple):
-        uuid, version = item
-        return {"uuid": uuid, "versionNumber": version}
-    return item
+    if isinstance(item, (tuple, list)):
+        if len(item) == 2 and isinstance(item[0], str):
+            return {"uuid": item[0], "versionNumber": item[1]}
+    elif isinstance(item, Mapping) or hasattr(item, "uuid"):
+        return item
+    raise TypeError(
+        "get_sd() items must be a UUID string, a (uuid, version_number) pair, a "
+        f"UuidAndVersionNumberType or a dict, not {item!r}"
+    )
 
 
 class _VersionedClient:
@@ -125,6 +133,7 @@ class _VersionedClient:
         session: t.Optional[requests.Session] = None,
         transport: t.Optional[Transport] = None,
         settings: t.Optional[Settings] = None,
+        plugins: t.Sequence[Plugin] = (),
     ):
         """
         :param test: use the acceptance environment (``False``: production).
@@ -132,14 +141,18 @@ class _VersionedClient:
             with ``False``, from the server.
         :param operation_timeout: timeout of SOAP calls in seconds.
         :param timeout: timeout of loading WSDL/XSD files (``vendored_schemas=False``).
-        :param session: :class:`requests.Session` shared by the four service clients
-            (one is created when omitted).
+        :param session: :class:`requests.Session` providing the HTTP configuration
+            (proxies, TLS, retry adapters, ...). It is copied, not modified; the copy
+            is shared by the four service clients.
         :param transport: zeep transport shared by the service clients, replacing
-            ``vendored_schemas``, ``operation_timeout``, ``timeout`` and ``session``.
+            ``vendored_schemas``, ``operation_timeout`` and ``timeout`` (``session``
+            can not be combined with it).
             A plain :class:`zeep.transports.Transport` loads the definitions from the
             network; use :func:`py_eudr.transport.make_transport` to keep vendored ones.
         :param settings: zeep settings; defaults to ``Settings(strict=False)`` so that
-            new optional elements in responses are tolerated.
+            new optional elements in responses are tolerated (malformed responses are
+            still rejected by the transport).
+        :param plugins: zeep plugins, applied after the authentication check.
         """
         self._test = test
         if transport is None:
@@ -147,13 +160,16 @@ class _VersionedClient:
                 vendored_schemas=vendored_schemas,
                 timeout=timeout,
                 operation_timeout=operation_timeout,
-                session=session or requests.Session(),
+                session=session,
             )
+        elif session is not None:
+            raise ValueError("Pass either session or transport, not both")
         self.transport = transport
         options: t.Dict[str, t.Any] = {
             "test": test,
             "transport": transport,
             "settings": settings or default_settings(),
+            "plugins": plugins,
         }
         self.echo_client = EchoClient(**options)
         self.dds_client = self.dds_client_class(**options)
@@ -187,9 +203,18 @@ class _VersionedClient:
         authentication_key: str,
         client_id: t.Optional[str] = None,
     ) -> t.Any:
-        """Set credentials for all following calls (in the current context)."""
+        """Set the credentials of this client instance, shared by all threads and tasks.
+
+        Nothing is stored in the current context; :meth:`authenticated` overrides
+        these credentials. For concurrent requests on behalf of different users use
+        :meth:`authenticated`; a :class:`RuntimeWarning` is emitted when different
+        credentials replace already-set ones.
+        """
+        warn_on_replaced_credentials(
+            self.echo_client, username, authentication_key, client_id
+        )
         for client in self._clients:
-            client.authenticate(
+            client._set_credentials(
                 username=username,
                 authentication_key=authentication_key,
                 client_id=client_id,
@@ -533,7 +558,7 @@ class ClientV3(_VersionedClient):
         def get_sd(
             self,
             uuids: t.Sequence[
-                "str | t.Tuple[str, int] | v3.UuidAndVersionNumberType | v3._Dict"
+                "str | t.Tuple[str, int] | t.List[str | int] | v3.UuidAndVersionNumberType | v3._Dict"
             ],
             *,
             body_identity: BodyIdentityArg = None,
@@ -627,7 +652,7 @@ class ClientV4(_VersionedClient):
         def get_sd(
             self,
             uuids: t.Sequence[
-                "str | t.Tuple[str, int] | v4.UuidAndVersionNumberType | v4._Dict"
+                "str | t.Tuple[str, int] | t.List[str | int] | v4.UuidAndVersionNumberType | v4._Dict"
             ],
             *,
             body_identity: BodyIdentityArg = None,

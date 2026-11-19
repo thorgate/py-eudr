@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextvars
 import typing as t
+import warnings
 from contextlib import contextmanager
 
 from zeep import Client as ZeepClient
@@ -27,6 +28,31 @@ def default_settings() -> Settings:
     """zeep settings used by default: tolerate unknown elements in responses, so an
     optional element added by the server does not break every call."""
     return Settings(strict=False)
+
+
+def warn_on_replaced_credentials(
+    client: ServiceClient,
+    username: str,
+    authentication_key: str,
+    client_id: t.Optional[str],
+    stacklevel: int = 3,
+) -> None:
+    """Warn when :meth:`ServiceClient.authenticate` replaces different credentials."""
+    current = client._instance_wsse
+    if current is None:
+        return
+    headers = client._instance_soapheaders or {}
+    if (current.username, current.password, headers.get("webServiceClientId")) != (
+        username,
+        authentication_key,
+        client.get_client_id(client_id),
+    ):
+        warnings.warn(
+            "authenticate() replaces the credentials shared by all threads; use "
+            "authenticated() for requests on behalf of different users",
+            RuntimeWarning,
+            stacklevel=stacklevel,
+        )
 
 
 class _RequireAuthentication(Plugin):
@@ -59,8 +85,10 @@ class ServiceClient(ZeepClient):
     network; use :func:`py_eudr.transport.make_transport` to configure the vendored one.
 
     Credentials: :meth:`authenticate` sets them on the instance (used by all threads
-    and tasks); :meth:`authenticated` overrides them in the current context only.
-    Calls without credentials raise :class:`py_eudr.exceptions.EUDRError`.
+    and tasks); :meth:`authenticated` overrides them in the current context only, and
+    is the one to use when requests for different users run concurrently.
+    Calls without credentials, including :meth:`create_message`, raise
+    :class:`py_eudr.exceptions.EUDRError`.
     """
 
     service_name: str = ""
@@ -73,6 +101,7 @@ class ServiceClient(ZeepClient):
         vendored_schemas: bool = True,
         transport: t.Optional[Transport] = None,
         settings: t.Optional[Settings] = None,
+        plugins: t.Sequence[Plugin] = (),
     ):
         if service_name is not None:
             self.service_name = service_name
@@ -95,7 +124,7 @@ class ServiceClient(ZeepClient):
             f"{self.address}?wsdl",
             transport=transport,
             settings=settings or default_settings(),
-            plugins=[_RequireAuthentication(self)],
+            plugins=[_RequireAuthentication(self), *plugins],
         )
 
         # The vendored WSDL points at acceptance; always bind to the selected environment.
@@ -107,6 +136,24 @@ class ServiceClient(ZeepClient):
     def service(self):
         """The service proxy bound to the acceptance or production address."""
         return self._bound_service
+
+    def bind(
+        self,
+        service_name: t.Optional[str] = None,
+        port_name: t.Optional[str] = None,
+    ):
+        """Like :meth:`zeep.Client.bind`, but bound to the selected environment's
+        address instead of the ``soap:address`` of the vendored WSDL."""
+        services = self.wsdl.services
+        service = (
+            services[service_name] if service_name else next(iter(services.values()))
+        )
+        port = (
+            service.ports[port_name]
+            if port_name
+            else next(iter(service.ports.values()))
+        )
+        return self.create_service(port.binding.name, self.address)
 
     @property
     def test(self) -> bool:
@@ -132,11 +179,21 @@ class ServiceClient(ZeepClient):
         authentication_key: str,
         client_id: t.Optional[str] = None,
     ):
-        """Set the credentials of this client instance (all threads and tasks).
+        """Set the credentials of this client instance, shared by all threads and tasks.
 
         Nothing is stored in the current context; :meth:`authenticated` blocks
-        override these credentials.
+        override these credentials. For concurrent requests on behalf of different
+        users use :meth:`authenticated`: replacing the instance credentials while
+        other requests are running would send those requests with the new ones, so
+        a :class:`RuntimeWarning` is emitted when different credentials replace
+        already-set ones.
         """
+        warn_on_replaced_credentials(self, username, authentication_key, client_id)
+        self._set_credentials(username, authentication_key, client_id)
+
+    def _set_credentials(
+        self, username: str, authentication_key: str, client_id: t.Optional[str]
+    ) -> None:
         self.wsse = EUDRUsernameToken(username, authentication_key)
         self.set_default_soapheaders(
             {"webServiceClientId": self.get_client_id(client_id)},
