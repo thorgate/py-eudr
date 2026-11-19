@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0
+## 1.0.0.dev1
 
 ### Breaking changes
 * The V1 `Client` (and `RetrievalClient`, `SubmissionClient`) is removed: the EUDR

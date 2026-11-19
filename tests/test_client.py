@@ -159,8 +159,9 @@ def test_authenticate_applies_to_all_threads(server):
     with ThreadPoolExecutor(1) as executor:
         executor.submit(client.get_dds, [UUID]).result()
     # authenticated() overrides the instance credentials in its context only
-    with pytest.warns(RuntimeWarning), client.authenticated(
-        username="dave", authentication_key="d"
+    with (
+        pytest.warns(RuntimeWarning),
+        client.authenticated(username="dave", authentication_key="d"),
     ):
         client.get_dds([UUID])
     client.get_dds([UUID])

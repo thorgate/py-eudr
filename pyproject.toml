@@ -1,12 +1,12 @@
 [project]
 name = "py-eudr"
-version = "1.0.0"
+version = "1.0.0.dev1"
 description = "Python client for the EU Deforestation Regulation (EUDR) Information System SOAP API (V3 and V4)"
 authors = [
     {name = "Sergey Kovalskiy",email = "sergey@thorgate.eu"}
 ]
 readme = "README.md"
-requires-python = ">=3.8.6,<4.0"
+requires-python = ">=3.9,<4.0"
 dependencies = [
     "zeep (>=4.3.1,<5)",
     "lxml (>=4.6)",
@@ -23,7 +23,7 @@ pytest = "*"
 mypy = "*"
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"
 extend-exclude = ["py_eudr/schemas"]
 
 [tool.ruff.format]
@@ -44,8 +44,7 @@ addopts = "-m 'not live'"
 markers = ["live: calls the EUDR acceptance environment (needs EUDR_USERNAME and EUDR_AUTHENTICATION_KEY)"]
 
 [tool.mypy]
-# Checked against the running interpreter. mypy 2.x can not target Python 3.8;
-# mypy 1.x can (--python-version 3.8).
+# Checked against the running interpreter (Python >= 3.9).
 
 [[tool.mypy.overrides]]
 module = ["lxml.*", "zeep.*"]
