@@ -65,7 +65,9 @@ def v4_usage(client: ClientV4) -> None:
                 hsHeading="4401",
                 descriptors=types.CommercialDescriptionType(
                     descriptionOfGoods="Logs",
-                    goodsMeasure=types.GoodsMeasureType(netWeight=Decimal("1.5")),
+                    goodsMeasure=types.GoodsMeasureType(
+                        netWeight=Decimal("1.5"), percentageEstimationOrDeviation="5"
+                    ),
                 ),
                 producers=[
                     types.SdProducerType(
@@ -75,6 +77,11 @@ def v4_usage(client: ClientV4) -> None:
             )
         ],
     )
+    # Lists inside an xs:choice are None when another alternative is used.
+    for address in location.postalAddress or []:
+        print(address.producerCity)
+    location.cadastralIdentifier.append("x")  # type: ignore[union-attr]
+    print(client.get_sd([["uuid", 2]]))
     sd_identifier: str = client.submit_sd("MICRO_OPERATOR", statement)
     info: t.Optional[str] = client.get_sd([sd_identifier])[0].referenceNumberInfo
     print(info, client.update_sd(sd_identifier, statement).version)

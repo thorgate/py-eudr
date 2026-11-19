@@ -28,10 +28,44 @@ def test_submit_and_withdraw_random_dds(server, caplog):
     assert goods_measure.find("{*}percentageEstimationOrDeviation") is not None
 
 
-@pytest.mark.parametrize("command", ["--submit-random", "--submit-random-sd"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["--submit-random"],
+        ["--submit-random-sd"],
+        ["--retract", UUID],
+        ["--retract-sd", UUID],
+    ],
+)
 def test_production_writes_need_explicit_flag(server, command):
     with pytest.raises(SystemExit):
-        main([*CREDENTIALS, "--production", command])
+        main([*CREDENTIALS, "--production", *command])
     assert server.sent == []
-    main([*CREDENTIALS, "--production", "--allow-production-writes", command])
+    main([*CREDENTIALS, "--production", "--allow-production-writes", *command])
     assert server.last.address.startswith("https://eudr.webcloud.ec.europa.eu/")
+
+
+def test_production_reads_need_no_flag(server):
+    main([*CREDENTIALS, "--production", "--retrieve", UUID])
+    assert server.last.address.startswith("https://eudr.webcloud.ec.europa.eu/")
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    [["-u", "", "-a", "key"], ["-u", "user", "-a", ""]],
+)
+def test_empty_credentials_are_rejected(server, monkeypatch, capsys, credentials):
+    monkeypatch.delenv("EUDR_USERNAME", raising=False)
+    monkeypatch.delenv("EUDR_AUTHENTICATION_KEY", raising=False)
+    with pytest.raises(SystemExit):
+        main([*credentials, "--echo"])
+    assert "EUDR_USERNAME" in capsys.readouterr().err
+    assert server.sent == []
+
+
+def test_empty_environment_credentials_are_rejected(server, monkeypatch):
+    monkeypatch.setenv("EUDR_USERNAME", "")
+    monkeypatch.setenv("EUDR_AUTHENTICATION_KEY", "")
+    with pytest.raises(SystemExit):
+        main(["--echo"])
+    assert server.sent == []

@@ -167,7 +167,7 @@ def test_operation(client, server, method, service, operation, call, check):
 
 
 def test_get_sd_uuid_and_version(client, server):
-    client.get_sd([UUID, (UUID, 3), {"uuid": UUID, "versionNumber": 4}])
+    client.get_sd([UUID, (UUID, 3), {"uuid": UUID, "versionNumber": 4}, [UUID, 5]])
     items = [
         {etree.QName(e).localname: e.text for e in item} for item in server.last.body
     ]
@@ -175,7 +175,15 @@ def test_get_sd_uuid_and_version(client, server):
         {"uuid": UUID},
         {"uuid": UUID, "versionNumber": "3"},
         {"uuid": UUID, "versionNumber": "4"},
+        {"uuid": UUID, "versionNumber": "5"},
     ]
+
+
+@pytest.mark.parametrize("item", [[UUID], (UUID, 1, 2), 42, [1, UUID]])
+def test_get_sd_rejects_invalid_items(client, server, item):
+    with pytest.raises(TypeError, match="uuid"):
+        client.get_sd([item])
+    assert server.sent == []
 
 
 def test_geojson_bytes_are_base64_encoded_once(client, server):

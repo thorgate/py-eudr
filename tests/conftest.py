@@ -179,6 +179,24 @@ class FakeServer:
     def last(self) -> Sent:
         return self.sent[-1]
 
+    def render(self, request: str, version: str) -> t.Tuple[int, str]:
+        status, body = self.overrides.get(request) or responses(version)[request]
+        body = body.format(**namespaces(version))
+        return status, (
+            f'<soap:Envelope xmlns:soap="{SOAP_ENV}"><soap:Body>{body}</soap:Body>'
+            "</soap:Envelope>"
+        )
+
+    def render_response(self, request: str, version: str, overviews: int = 1) -> str:
+        """Canned response envelope, with the overview list repeated."""
+        xml = self.render(request, version)[1]
+        for name in ("ddsOverviewList", "sdOverviewList"):
+            start, end = f"<{name}>", f"</{name}>"
+            if start in xml:
+                item = xml[xml.index(start) : xml.index(end) + len(end)]
+                xml = xml.replace(item, item * overviews)
+        return xml
+
     def post_xml(self, address: str, envelope: t.Any, headers: t.Dict[str, str]):
         sent = Sent(address, dict(headers), envelope)
         self.sent.append(sent)
@@ -191,12 +209,7 @@ class FakeServer:
             response._content = content
             response.headers["Content-Type"] = content_type
             return response
-        status, body = self.overrides.get(request) or responses(version)[request]
-        body = body.format(**namespaces(version))
-        xml = (
-            f'<soap:Envelope xmlns:soap="{SOAP_ENV}"><soap:Body>{body}</soap:Body>'
-            "</soap:Envelope>"
-        )
+        status, xml = self.render(request, version)
         response = requests.Response()
         response.status_code = status
         response._content = xml.encode()

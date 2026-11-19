@@ -3,15 +3,20 @@
 import contextvars
 import sys
 import threading
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import requests
+import requests.adapters
+import zeep.exceptions
 from conftest import BASE, UUID, WSSE
+from zeep import Plugin
 from zeep.settings import Settings
 
 from py_eudr import ClientV3, ClientV4, EUDRError
 from py_eudr.base import ServiceClient
+from py_eudr.exceptions import MalformedResponseError
 from py_eudr.transport import (
     SchemaNotVendoredError,
     VendoredSchemaTransport,
@@ -228,13 +233,105 @@ def test_production_client_id_default(server):
 
 def test_transport_options():
     session = requests.Session()
+    session.headers["User-Agent"] = "mine"
+    session.headers["X-Extra"] = "1"
+    session.proxies["https"] = "http://proxy.example:3128"
+    session.verify = "/etc/ssl/custom.pem"
+    retry_adapter = requests.adapters.HTTPAdapter(max_retries=3)
+    session.mount("https://", retry_adapter)
+    adapters_before = dict(session.adapters)
     client = ClientV4(operation_timeout=12, session=session)
+
+    # The caller's session is copied, not modified.
+    assert session.headers["User-Agent"] == "mine"
+    assert dict(session.adapters) == adapters_before
+    transport_session = client.transport.session
+    assert transport_session is not session
+    assert transport_session.headers["X-Extra"] == "1"
+    assert transport_session.headers["User-Agent"].startswith("Zeep/")
+    assert transport_session.proxies == session.proxies
+    assert transport_session.verify == "/etc/ssl/custom.pem"
+    assert transport_session.adapters["https://"] is retry_adapter
+
     transports = {id(c.transport) for c in client._clients}
     assert len(transports) == 1
     assert isinstance(client.transport, VendoredSchemaTransport)
     assert client.transport.operation_timeout == 12
-    assert client.transport.session is session
     assert ClientV3().transport.operation_timeout == 60
+
+
+def test_session_and_transport_are_exclusive():
+    with pytest.raises(ValueError):
+        ClientV3(session=requests.Session(), transport=make_transport())
+
+
+def test_plugins_run_after_the_authentication_check(server):
+    seen = []
+
+    class Recorder(Plugin):
+        def egress(self, envelope, http_headers, operation, binding_options):
+            seen.append(operation.name)
+            return envelope, http_headers
+
+    client = ClientV3(plugins=[Recorder()])
+    with pytest.raises(EUDRError):
+        client.get_dds([UUID])
+    assert seen == []
+    client.authenticate(username="u", authentication_key="k")
+    client.get_dds([UUID])
+    assert seen == ["getDds"]
+
+
+def test_authenticate_warns_when_replacing_credentials(server):
+    client = ClientV3()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        client.authenticate(username="u", authentication_key="k")
+        client.authenticate(username="u", authentication_key="k")  # same: no warning
+        client.dds_client.authenticate(username="u", authentication_key="k")
+    with pytest.warns(RuntimeWarning, match="authenticated"):
+        client.authenticate(username="other", authentication_key="k")
+    with pytest.warns(RuntimeWarning):
+        client.authenticate(username="other", authentication_key="k", client_id="x")
+    with pytest.warns(RuntimeWarning):
+        client.dds_client.authenticate(username="third", authentication_key="k")
+
+
+def test_create_message_requires_credentials():
+    client = ClientV3()
+    with pytest.raises(EUDRError):
+        client.dds_client.create_message(
+            client.dds_client.service, "getDds", uuidList=[UUID]
+        )
+
+
+def test_bind_uses_selected_address():
+    client = ClientV3(test=False)
+    for proxy in (
+        client.dds_client.bind(),
+        client.dds_client.bind(
+            "EUDRDueDiligenceStatementServiceV3",
+            "EUDRDueDiligenceStatementServiceV3Endpoint",
+        ),
+    ):
+        assert proxy._binding_options["address"] == (
+            f"{PRODUCTION}EUDRDueDiligenceStatementServiceV3"
+        )
+
+
+def test_truncated_response_is_rejected(client, server):
+    version = "v4" if type(client).__name__ == "ClientV4" else "v3"
+    full = server.render_response("GetDdsRequest", version, overviews=3)
+    truncated = full[
+        : full.index("</ddsOverviewList>", full.index("</ddsOverviewList>") + 1)
+    ]
+    server.raw_responses["GetDdsRequest"] = (200, "text/xml", truncated.encode())
+    with pytest.raises(MalformedResponseError) as excinfo:
+        client.get_dds([UUID])
+    assert isinstance(excinfo.value, zeep.exceptions.TransportError)
+    assert isinstance(excinfo.value, EUDRError)
+    server.raw_responses["GetDdsRequest"] = (200, "text/xml", full.encode())
+    assert len(client.get_dds([UUID])) == 3
 
 
 def test_custom_transport_and_settings():
