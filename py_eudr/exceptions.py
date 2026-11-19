@@ -1,7 +1,7 @@
 import typing as t
 
 from lxml import etree
-from zeep.exceptions import Fault
+from zeep.exceptions import Fault, TransportError
 
 
 class EUDRError(Exception):
@@ -12,6 +12,10 @@ class EUDRError(Exception):
     part of this hierarchy; ``zeep.exceptions.Error`` catches those and every
     :class:`EUDRFault`.
     """
+
+
+class MalformedResponseError(EUDRError, TransportError):
+    """The server response is not well-formed XML (e.g. truncated)."""
 
 
 class ErrorDetail(t.NamedTuple):

@@ -14,7 +14,10 @@ import typing as t
 from urllib.parse import parse_qs, urlparse
 
 import requests
+from lxml import etree
 from zeep.transports import Transport
+
+from py_eudr.exceptions import MalformedResponseError
 
 EUDR_HOSTS = frozenset(
     {
@@ -76,6 +79,30 @@ def load_vendored(url: str) -> t.Optional[bytes]:
     return data
 
 
+def copy_session(session: requests.Session) -> requests.Session:
+    """Return a new session with the configuration of ``session``.
+
+    zeep's transport modifies its session (mounts a ``file://`` adapter and sets the
+    ``User-Agent`` header), so the caller's session is never used directly. Proxies,
+    TLS settings (``verify``, ``cert``), ``auth``, headers, cookies, parameters,
+    redirect and environment settings and mounted adapters (e.g. retries) are copied;
+    adapters are shared, so connection pools are reused.
+    """
+    copy = requests.Session()
+    copy.headers.update(session.headers)
+    copy.proxies.update(session.proxies)
+    copy.params.update(session.params)
+    copy.cookies.update(session.cookies)
+    copy.verify = session.verify
+    copy.cert = session.cert
+    copy.auth = session.auth
+    copy.trust_env = session.trust_env
+    copy.max_redirects = session.max_redirects
+    for prefix, adapter in session.adapters.items():
+        copy.mount(prefix, adapter)
+    return copy
+
+
 def make_transport(
     *,
     vendored_schemas: bool = True,
@@ -86,16 +113,50 @@ def make_transport(
     """Build the transport used by the EUDR clients.
 
     ``timeout`` applies to loading WSDL/XSD files (only with ``vendored_schemas=False``),
-    ``operation_timeout`` to SOAP calls. Pass ``session`` to share one
-    :class:`requests.Session` (connection pool, proxies, retries) between clients.
+    ``operation_timeout`` to SOAP calls. ``session`` provides the HTTP configuration
+    (proxies, TLS, retry adapters, ...); it is copied with :func:`copy_session` and
+    not modified.
     """
-    transport_class = VendoredSchemaTransport if vendored_schemas else Transport
+    transport_class = (
+        VendoredSchemaTransport if vendored_schemas else WellFormedResponseTransport
+    )
     return transport_class(
-        timeout=timeout, operation_timeout=operation_timeout, session=session
+        timeout=timeout,
+        operation_timeout=operation_timeout,
+        session=copy_session(session) if session is not None else None,
     )
 
 
-class VendoredSchemaTransport(Transport):
+def check_well_formed(response: requests.Response) -> None:
+    """Raise :class:`MalformedResponseError` unless the body is well-formed XML.
+
+    zeep parses responses with lxml's recover mode when ``Settings(strict=False)`` is
+    used, which would silently repair a truncated response (e.g. drop list items).
+    """
+    parser = etree.XMLParser(
+        recover=False, resolve_entities=False, no_network=True, huge_tree=False
+    )
+    try:
+        etree.fromstring(response.content, parser)
+    except etree.XMLSyntaxError as exc:
+        raise MalformedResponseError(
+            f"Response is not well-formed XML: {exc}",
+            status_code=response.status_code,
+            content=response.content,
+        ) from exc
+
+
+class WellFormedResponseTransport(Transport):
+    """A :class:`zeep.transports.Transport` that rejects responses that are not
+    well-formed XML (see :func:`check_well_formed`)."""
+
+    def post_xml(self, address, envelope, headers):
+        response = super().post_xml(address, envelope, headers)
+        check_well_formed(response)
+        return response
+
+
+class VendoredSchemaTransport(WellFormedResponseTransport):
     """A :class:`zeep.transports.Transport` that loads EUDR WSDL/XSD files from the
     package instead of the network.
 
