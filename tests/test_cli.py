@@ -69,3 +69,21 @@ def test_empty_environment_credentials_are_rejected(server, monkeypatch):
     with pytest.raises(SystemExit):
         main(["--echo"])
     assert server.sent == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["--retrieve", ""],
+        ["--retract", " "],
+        ["--retrieve-sd", ""],
+        ["--retract-sd", ""],
+        ["--verify", "25EEABCDEFGHIJ", ""],
+        ["--echo", "--client-id", ""],
+    ],
+)
+def test_empty_values_are_rejected(server, capsys, command):
+    with pytest.raises(SystemExit):
+        main([*CREDENTIALS, *command])
+    assert "must not be empty" in capsys.readouterr().err
+    assert server.sent == []

@@ -189,3 +189,22 @@ def test_typed_example_passes_mypy():
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_public_names_pass_mypy_strict():
+    pytest.importorskip("mypy")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--strict",
+            "--follow-imports=silent",
+            "--no-incremental",
+            os.path.join(ROOT, "tests", "typing", "strict_imports.py"),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

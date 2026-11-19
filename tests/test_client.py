@@ -20,6 +20,8 @@ from py_eudr.exceptions import MalformedResponseError
 from py_eudr.transport import (
     SchemaNotVendoredError,
     VendoredSchemaTransport,
+    check_response,
+    copy_session,
     make_transport,
     vendored_path,
 )
@@ -157,7 +159,9 @@ def test_authenticate_applies_to_all_threads(server):
     with ThreadPoolExecutor(1) as executor:
         executor.submit(client.get_dds, [UUID]).result()
     # authenticated() overrides the instance credentials in its context only
-    with client.authenticated(username="dave", authentication_key="d"):
+    with pytest.warns(RuntimeWarning), client.authenticated(
+        username="dave", authentication_key="d"
+    ):
         client.get_dds([UUID])
     client.get_dds([UUID])
     assert [_identity(sent) for sent in server.sent] == [
@@ -367,3 +371,91 @@ def test_service_is_bound_to_selected_address():
     assert service._binding_options["address"] == (
         f"{PRODUCTION}EUDRDueDiligenceStatementServiceV3"
     )
+
+
+def test_authenticated_warns_when_instance_credentials_are_set(server):
+    client = ClientV3()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with client.authenticated(username="a", authentication_key="a"):
+            pass
+    client.authenticate(username="u", authentication_key="k")
+    with pytest.warns(RuntimeWarning, match="current context") as record:
+        with client.authenticated(username="b", authentication_key="b"):
+            # A plain thread does not see the context credentials.
+            thread = threading.Thread(target=client.get_dds, args=([UUID],))
+            thread.start()
+            thread.join()
+    assert len(record) == 1
+    assert _identity(server.last) == ("eudr-test", "u")
+    with pytest.warns(RuntimeWarning):
+        with client.dds_client.authenticated(username="b", authentication_key="b"):
+            pass
+
+
+def test_copy_session_copies_hooks_and_stream():
+    def hook(response, *args, **kwargs):
+        return response
+
+    session = requests.Session()
+    session.hooks["response"].append(hook)
+    session.stream = True
+    copy = copy_session(session)
+    assert copy.hooks["response"] == [hook]
+    assert copy.stream is True
+    copy.hooks["response"].append(hook)
+    assert session.hooks["response"] == [hook]
+
+
+def test_huge_tree_follows_settings():
+    client = ClientV3(settings=Settings(strict=False, xml_huge_tree=True))
+    assert client.transport.xml_huge_tree is True
+    assert ClientV3().transport.xml_huge_tree is False
+
+
+def _response(status, content, content_type="text/xml"):
+    response = requests.Response()
+    response.status_code = status
+    response._content = content
+    response.headers["Content-Type"] = content_type
+    return response
+
+
+def test_check_response_rules():
+    with pytest.raises(MalformedResponseError, match="HTTP 200"):
+        check_response(_response(200, b"<a><b></a>"))
+    with pytest.raises(MalformedResponseError, match="HTTP 503"):
+        check_response(_response(503, b"<html><body>Down</body></html>", "text/html"))
+    with pytest.raises(MalformedResponseError, match="HTTP 502.*not well-formed"):
+        check_response(_response(502, b"<html><br></html>", "text/html"))
+    # Empty bodies and SOAP faults are left to zeep.
+    check_response(_response(202, b""))
+    check_response(_response(204, b""))
+    check_response(
+        _response(
+            500,
+            b'<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            b"<s:Body/></s:Envelope>",
+        )
+    )
+    # A well-formed non-SOAP body with a success status is left to zeep, too.
+    check_response(_response(200, b"<html><body>ok</body></html>"))
+
+
+def test_check_response_huge_tree():
+    deep = b"<a>" * 300 + b"</a>" * 300
+    with pytest.raises(MalformedResponseError):
+        check_response(_response(200, deep))
+    check_response(_response(200, deep), huge_tree=True)
+
+
+def test_xml_error_page_raises_transport_error(client, server):
+    server.raw_responses["GetDdsRequest"] = (
+        503,
+        "text/html",
+        b"<html><body>Service Unavailable</body></html>",
+    )
+    with pytest.raises(MalformedResponseError, match="HTTP 503") as excinfo:
+        client.get_dds([UUID])
+    assert isinstance(excinfo.value, zeep.exceptions.TransportError)
+    assert excinfo.value.status_code == 503
