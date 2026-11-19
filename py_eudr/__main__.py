@@ -35,7 +35,7 @@ def main(args: t.Optional[t.Sequence[str]] = None) -> None:
     parser.add_argument(
         "--allow-production-writes",
         action="store_true",
-        help="Allow --submit-random/--submit-random-sd with --production",
+        help="Allow submitting and withdrawing with --production",
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--echo", "-e", action="store_true")
@@ -56,20 +56,26 @@ def main(args: t.Optional[t.Sequence[str]] = None) -> None:
         help="Verify a DDS or SD",
     )
     options = parser.parse_args(args)
-    if (
-        options.production
-        and (options.submit_random or options.submit_random_sd)
-        and not options.allow_production_writes
-    ):
+    writes = (
+        options.submit_random
+        or options.submit_random_sd
+        or options.retract
+        or options.retract_sd
+    )
+    if options.production and writes and not options.allow_production_writes:
         parser.error(
-            "refusing to submit random data to production without "
-            "--allow-production-writes"
+            "refusing to write to production without --allow-production-writes"
         )
 
     username = options.username or os.environ.get("EUDR_USERNAME", "")
     authentication_key = options.authentication_key or os.environ.get(
         "EUDR_AUTHENTICATION_KEY", ""
     )
+    if not username or not authentication_key:
+        parser.error(
+            "username and authentication key must not be empty "
+            "(--username/--authentication-key or EUDR_USERNAME/EUDR_AUTHENTICATION_KEY)"
+        )
     client_id = options.client_id or os.environ.get("EUDR_CLIENT_ID")
 
     client_class = ClientV4 if options.v4 else ClientV3
