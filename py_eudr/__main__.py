@@ -56,11 +56,17 @@ def main(args: t.Optional[t.Sequence[str]] = None) -> None:
         help="Verify a DDS or SD",
     )
     options = parser.parse_args(args)
+    for name in ("retrieve", "retract", "retrieve_sd", "retract_sd", "client_id"):
+        value = getattr(options, name)
+        if value is not None and not value.strip():
+            parser.error(f"--{name.replace('_', '-')} must not be empty")
+    if options.verify is not None and not all(v.strip() for v in options.verify):
+        parser.error("--verify values must not be empty")
     writes = (
         options.submit_random
         or options.submit_random_sd
-        or options.retract
-        or options.retract_sd
+        or options.retract is not None
+        or options.retract_sd is not None
     )
     if options.production and writes and not options.allow_production_writes:
         parser.error(
