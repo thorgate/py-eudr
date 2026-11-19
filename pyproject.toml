@@ -15,6 +15,7 @@ dependencies = [
 
 [tool.poetry]
 packages = [{ include = "py_eudr" }]
+include = [{ path = "CHANGELOG.md", format = "sdist" }]
 
 [tool.poetry.group.dev.dependencies]
 ruff = "*"
@@ -47,7 +48,7 @@ markers = ["live: calls the EUDR acceptance environment (needs EUDR_USERNAME and
 # mypy 1.x can (--python-version 3.8).
 
 [[tool.mypy.overrides]]
-module = ["backports.*", "lxml.*", "zeep.*"]
+module = ["lxml.*", "zeep.*"]
 ignore_missing_imports = true
 
 [build-system]

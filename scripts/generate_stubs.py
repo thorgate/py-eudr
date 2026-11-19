@@ -225,7 +225,8 @@ class StubBuilder:
                     )
                 attr = self.annotation(element.type, param=False)
                 param = self.annotation(element.type, param=True)
-                many = element.max_occurs == "unbounded" or element.max_occurs > 1
+                max_occurs = element.max_occurs
+                many = max_occurs == "unbounded" or int(max_occurs) > 1
                 optional = in_choice or optional_group or element.min_occurs == 0
                 if many:
                     attr, param = f"list[{attr}]", f"Sequence[{param}]"
