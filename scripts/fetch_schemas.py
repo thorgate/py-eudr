@@ -67,7 +67,7 @@ def same_service(url: str, service: str) -> bool:
 
 def crawl(session: requests.Session, host: str, service: str) -> Dict[str, bytes]:
     """Download all documents of one service, keyed by local file name."""
-    start = "https://{}/tracesnt/ws/{}?wsdl".format(host, service)
+    start = f"https://{host}/tracesnt/ws/{service}?wsdl"
     queue: List[str] = [start]
     files: Dict[str, bytes] = {}
     while queue:
@@ -80,7 +80,7 @@ def crawl(session: requests.Session, host: str, service: str) -> Dict[str, bytes
         try:
             document = etree.fromstring(response.content)
         except etree.XMLSyntaxError as exc:
-            raise RuntimeError("{} did not return XML: {}".format(url, exc))
+            raise RuntimeError(f"{url} did not return XML: {exc}") from exc
         files[name] = response.content
         for node in document.xpath(LOCATION_XPATH):
             location: Optional[str] = node.get("location") or node.get("schemaLocation")
@@ -111,7 +111,7 @@ def main(argv=None) -> int:
             path = os.path.join(target, name)
             if name not in files:
                 if name.endswith((".wsdl", ".xsd")):
-                    print("removed  {}/{}".format(directory, name))
+                    print(f"removed  {directory}/{name}")
                     changed += 1
                     if not options.check:
                         os.remove(path)
@@ -128,7 +128,7 @@ def main(argv=None) -> int:
                 os.makedirs(target, exist_ok=True)
                 with open(path, "wb") as fh:
                     fh.write(files[name])
-    print("{} file(s) differ from {}".format(changed, host))
+    print(f"{changed} file(s) differ from {host}")
     return 1 if options.check and changed else 0
 
 

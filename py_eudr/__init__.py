@@ -1,1 +1,8 @@
-from .client import Client, ClientV3  # noqa
+from .client import BodyIdentity, ClientV3, ClientV4  # noqa
+from .exceptions import (  # noqa
+    EUDRError,
+    EUDRFault,
+    NotFoundError,
+    PermissionDeniedError,
+    ValidationError,
+)

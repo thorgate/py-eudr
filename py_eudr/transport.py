@@ -89,5 +89,7 @@ class VendoredSchemaTransport(Transport):
         if data is not None:
             return data
         if self.strict:
-            raise SchemaNotVendoredError(f"Refusing to load {url}: not a vendored EUDR schema")
+            raise SchemaNotVendoredError(
+                f"Refusing to load {url}: not a vendored EUDR schema"
+            )
         return super().load(url)

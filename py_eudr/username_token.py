@@ -1,10 +1,9 @@
 import datetime
 
-
 try:
     import zoneinfo
 except ImportError:
-    from backports import zoneinfo
+    from backports import zoneinfo  # type: ignore[no-redef]
 
 from zeep.wsse.username import UsernameToken
 from zeep.wsse.utils import WSU, ensure_id

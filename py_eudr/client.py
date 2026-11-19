@@ -1,100 +1,64 @@
 import typing as t
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
+
+from zeep.exceptions import Fault
 
 from py_eudr.base import (
     DueDiligenceStatementClientV3,
+    DueDiligenceStatementClientV4,
     EchoClient,
-    RetrievalClient,
+    ServiceClient,
     SimplifiedDeclarationClientV3,
-    SubmissionClient,
+    SimplifiedDeclarationClientV4,
     VerifyDeclarationClientV3,
+    VerifyDeclarationClientV4,
 )
+from py_eudr.exceptions import translate_fault
+
+if t.TYPE_CHECKING:
+    from py_eudr.types import v3, v4
 
 EUDR_NAMESPACE_PREFIX = "http://ec.europa.eu/tracesnt/certificate/eudr/"
 
+_BODY_IDENTITY_ELEMENTS = {
+    "operator": "OperatorAccessIdentifier",
+    "authority_activity": "AuthorityActivityAccessIdentifier",
+    "organic_control_body": "OrganicControlBodyAccessIdentifier",
+    "other_body": "OtherBodyAccessIdentifier",
+}
 
-class Client:
-    def __init__(
-        self,
-        *,
-        test: bool = True,
-    ):
-        self.echo_client = EchoClient(test=test)
-        self.retrieval_client = RetrievalClient(test=test)
-        self.submission_client = SubmissionClient(test=test)
 
-        self.test_echo: t.Callable[[str], str] = self.echo_client.service.testEcho
-        self.get_dds_info: t.Callable[[str], t.List[str]] = (
-            self.retrieval_client.service.getDdsInfo
-        )
-        self.get_dds_info_by_internal_reference_number = (
-            self.retrieval_client.service.getDdsInfoByInternalReferenceNumber
-        )
-        self.get_statement_by_identifiers = (
-            self.retrieval_client.service.getStatementByIdentifiers
-        )
-        self.amend_dds = self.submission_client.service.amendDds
-        self.retract_dds = self.submission_client.service.retractDds
-        self.submit_dds = self.submission_client.service.submitDds
+@dataclass(frozen=True)
+class BodyIdentity:
+    """Value of the ``BodyIdentity`` SOAP header (exactly one identifier).
 
-        types = {
-            dynamic_type.__class__.__name__: dynamic_type
-            for dynamic_type in self.submission_client.wsdl.types.types
+    ``OperatorAccessIdentifier`` (``operator``) is the only kind accepted by the EUDR
+    endpoints. Methods also accept a plain string, meaning an operator identifier.
+    """
+
+    operator: t.Optional[str] = None
+    authority_activity: t.Optional[str] = None
+    organic_control_body: t.Optional[str] = None
+    other_body: t.Optional[str] = None
+
+    def __post_init__(self) -> None:
+        given = [name for name in _BODY_IDENTITY_ELEMENTS if getattr(self, name)]
+        if len(given) != 1:
+            raise ValueError("BodyIdentity requires exactly one identifier")
+
+    def to_header(self) -> t.Dict[str, str]:
+        return {
+            element: getattr(self, name)
+            for name, element in _BODY_IDENTITY_ELEMENTS.items()
+            if getattr(self, name)
         }
-        types.update(
-            {
-                dynamic_type.__class__.__name__: dynamic_type
-                for dynamic_type in self.retrieval_client.wsdl.types.types
-            }
-        )
-        self.types = type(
-            "Types",
-            (object,),
-            types,
-        )
-
-    def authenticate(
-        self,
-        *,
-        username: str,
-        authentication_key: str,
-        client_id: t.Optional[str] = None,
-    ) -> "Client":
-        kwargs = {
-            "username": username,
-            "authentication_key": authentication_key,
-            "client_id": client_id,
-        }
-        self.echo_client.authenticate(**kwargs)
-        self.retrieval_client.authenticate(**kwargs)
-        self.submission_client.authenticate(**kwargs)
-        return self
-
-    @contextmanager
-    def authenticated(
-        self,
-        *,
-        username: str,
-        authentication_key: str,
-        client_id: t.Optional[str] = None,
-    ):
-        with self.echo_client.authenticated(
-            username=username,
-            authentication_key=authentication_key,
-            client_id=client_id,
-        ), self.retrieval_client.authenticated(
-            username=username,
-            authentication_key=authentication_key,
-            client_id=client_id,
-        ), self.submission_client.authenticated(
-            username=username,
-            authentication_key=authentication_key,
-            client_id=client_id,
-        ):
-            yield self
 
 
-def _collect_types(client: EchoClient) -> type:
+BodyIdentityArg = t.Union[BodyIdentity, str, None]
+
+
+def _collect_types(client: ServiceClient) -> type:
     """Collect WSDL types of a single service into a class, keyed by type name.
 
     A service may define types with the same name in different namespaces (e.g. `CountryType` in both TRACES base
@@ -112,41 +76,49 @@ def _collect_types(client: EchoClient) -> type:
     return type("Types", (object,), types)
 
 
-class ClientV3:
-    def __init__(
-        self,
-        *,
-        test: bool = True,
-    ):
-        self.echo_client = EchoClient(test=test)
-        self.dds_client = DueDiligenceStatementClientV3(test=test)
-        self.sd_client = SimplifiedDeclarationClientV3(test=test)
-        self.verify_client = VerifyDeclarationClientV3(test=test)
+def _soapheaders(body_identity: BodyIdentityArg) -> t.Dict[str, t.Any]:
+    if body_identity is None:
+        return {}
+    if isinstance(body_identity, str):
+        body_identity = BodyIdentity(operator=body_identity)
+    return {"_soapheaders": {"bodyIdentity": body_identity.to_header()}}
 
-        self.test_echo: t.Callable[[str], str] = self.echo_client.service.testEcho
 
-        self.submit_dds = self.dds_client.service.submitDds
-        self.amend_dds = self.dds_client.service.amendDds
-        self.withdraw_dds = self.dds_client.service.withdrawDds
-        self.get_dds = self.dds_client.service.getDds
-        self.get_dds_by_internal_reference = (
-            self.dds_client.service.getDdsByInternalReference
+def _uuid_and_version(item: t.Any) -> t.Any:
+    if isinstance(item, str):
+        return {"uuid": item}
+    if isinstance(item, tuple):
+        uuid, version = item
+        return {"uuid": uuid, "versionNumber": version}
+    return item
+
+
+class _VersionedClient:
+    """Shared implementation of :class:`ClientV3` and :class:`ClientV4`.
+
+    Both API versions have the same 13 operations; only namespaces and some types differ.
+    Version specific signatures are declared for type checkers on the subclasses.
+    """
+
+    dds_client_class: t.Type[ServiceClient]
+    sd_client_class: t.Type[ServiceClient]
+    verify_client_class: t.Type[ServiceClient]
+
+    def __init__(self, *, test: bool = True, vendored_schemas: bool = True):
+        self.test = test
+        self.echo_client = EchoClient(test=test, vendored_schemas=vendored_schemas)
+        self.dds_client = self.dds_client_class(
+            test=test, vendored_schemas=vendored_schemas
         )
-        self.get_dds_by_identifiers = self.dds_client.service.getDdsByIdentifiers
-
-        self.submit_sd = self.sd_client.service.submitSd
-        self.update_sd = self.sd_client.service.updateSd
-        self.withdraw_sd = self.sd_client.service.withdrawSd
-        self.get_sd = self.sd_client.service.getSd
-        self.get_sd_by_internal_reference = (
-            self.sd_client.service.getSdByInternalReference
+        self.sd_client = self.sd_client_class(
+            test=test, vendored_schemas=vendored_schemas
         )
-        self.get_sd_by_identifiers = self.sd_client.service.getSdByIdentifiers
-
-        self.verify_declaration = self.verify_client.service.verifyDeclaration
+        self.verify_client = self.verify_client_class(
+            test=test, vendored_schemas=vendored_schemas
+        )
 
         # Types are kept per service, as merging them would silently replace same-named types from other services.
-        self.types = type(
+        self.types: t.Any = type(
             "Types",
             (object,),
             {
@@ -157,7 +129,7 @@ class ClientV3:
         )
 
     @property
-    def _clients(self) -> t.Tuple[EchoClient, ...]:
+    def _clients(self) -> t.Tuple[ServiceClient, ...]:
         return (self.echo_client, self.dds_client, self.sd_client, self.verify_client)
 
     def authenticate(
@@ -166,7 +138,8 @@ class ClientV3:
         username: str,
         authentication_key: str,
         client_id: t.Optional[str] = None,
-    ) -> "ClientV3":
+    ) -> t.Any:
+        """Set credentials for all following calls (in the current context)."""
         for client in self._clients:
             client.authenticate(
                 username=username,
@@ -175,14 +148,32 @@ class ClientV3:
             )
         return self
 
-    @contextmanager
     def authenticated(
         self,
         *,
         username: str,
         authentication_key: str,
         client_id: t.Optional[str] = None,
-    ):
+    ) -> t.ContextManager[t.Any]:
+        """Use the given credentials inside the ``with`` block (thread and async safe).
+
+        Credentials are kept in context variables, so one client instance can be shared
+        between threads and asyncio tasks using different credentials.
+        """
+        return self._authenticated(
+            username=username,
+            authentication_key=authentication_key,
+            client_id=client_id,
+        )
+
+    @contextmanager
+    def _authenticated(
+        self,
+        *,
+        username: str,
+        authentication_key: str,
+        client_id: t.Optional[str] = None,
+    ) -> t.Iterator[t.Any]:
         with ExitStack() as stack:
             for client in self._clients:
                 stack.enter_context(
@@ -193,3 +184,410 @@ class ClientV3:
                     )
                 )
             yield self
+
+    @staticmethod
+    def _call(client: ServiceClient, operation: str, **kwargs: t.Any) -> t.Any:
+        try:
+            return getattr(client.service, operation)(**kwargs)
+        except Fault as fault:
+            translated = translate_fault(fault)
+            if translated is fault:
+                raise
+            raise translated from fault
+
+    # Echo
+
+    def test_echo(self, query: str) -> str:
+        """Call the echo service; returns the echoed status string."""
+        return self._call(self.echo_client, "testEcho", query=query)
+
+    # Due Diligence Statements
+
+    def submit_dds(
+        self,
+        operator_role: t.Any,
+        statement: t.Any,
+        *,
+        body_identity: BodyIdentityArg = None,
+    ) -> str:
+        """Submit a Due Diligence Statement; returns its UUID.
+
+        ``operator_role`` is ``"OPERATOR"`` or ``"REPRESENTATIVE_OPERATOR"``.
+        """
+        return self._call(
+            self.dds_client,
+            "submitDds",
+            operatorRole=operator_role,
+            statement=statement,
+            **_soapheaders(body_identity),
+        )
+
+    def amend_dds(
+        self, uuid: str, statement: t.Any, *, body_identity: BodyIdentityArg = None
+    ) -> t.Any:
+        """Amend a DDS (within the amendment window); returns its new status."""
+        return self._call(
+            self.dds_client,
+            "amendDds",
+            uuid=uuid,
+            statement=statement,
+            **_soapheaders(body_identity),
+        )
+
+    def withdraw_dds(
+        self, uuid: str, *, body_identity: BodyIdentityArg = None
+    ) -> t.Any:
+        """Withdraw a DDS (within the amendment window); returns its new status."""
+        return self._call(
+            self.dds_client, "withdrawDds", uuid=uuid, **_soapheaders(body_identity)
+        )
+
+    def get_dds(
+        self, uuids: t.Sequence[str], *, body_identity: BodyIdentityArg = None
+    ) -> t.List[t.Any]:
+        """Return the overview (status, reference and verification number) of DDSs."""
+        result = self._call(
+            self.dds_client,
+            "getDds",
+            uuidList=list(uuids),
+            **_soapheaders(body_identity),
+        )
+        return list(result or [])
+
+    def get_dds_by_internal_reference(
+        self, internal_reference: str, *, body_identity: BodyIdentityArg = None
+    ) -> t.List[t.Any]:
+        """Return the overview of DDSs with the given internal reference number."""
+        result = self._call(
+            self.dds_client,
+            "getDdsByInternalReference",
+            internalReference=internal_reference,
+            **_soapheaders(body_identity),
+        )
+        return list(result or [])
+
+    def get_dds_by_identifiers(
+        self,
+        reference_number: str,
+        verification_number: str,
+        *,
+        body_identity: BodyIdentityArg = None,
+    ) -> t.Any:
+        """Retrieve a DDS by reference and verification number.
+
+        The server no longer returns statement content over the API: this always
+        raises :class:`py_eudr.exceptions.NotFoundError` (kept for API compatibility).
+        """
+        return self._call(
+            self.dds_client,
+            "getDdsByIdentifiers",
+            referenceAndVerificationNumber={
+                "referenceNumber": reference_number,
+                "verificationNumber": verification_number,
+            },
+            **_soapheaders(body_identity),
+        )
+
+    # Simplified Declarations
+
+    def submit_sd(
+        self,
+        operator_role: t.Any,
+        statement: t.Any,
+        *,
+        body_identity: BodyIdentityArg = None,
+    ) -> str:
+        """Submit a Simplified Declaration; returns its identifier (UUID).
+
+        ``operator_role`` is ``"MICRO_OPERATOR"``, ``"REPRESENTATIVE_MSPO"`` or
+        ``"MEMBER_STATE"``.
+        """
+        return self._call(
+            self.sd_client,
+            "submitSd",
+            operatorRole=operator_role,
+            statement=statement,
+            **_soapheaders(body_identity),
+        )
+
+    def update_sd(
+        self,
+        sd_identifier: str,
+        statement: t.Any,
+        *,
+        body_identity: BodyIdentityArg = None,
+    ) -> t.Any:
+        """Update a Simplified Declaration; returns its new version and status."""
+        return self._call(
+            self.sd_client,
+            "updateSd",
+            sdIdentifier=sd_identifier,
+            statement=statement,
+            **_soapheaders(body_identity),
+        )
+
+    def withdraw_sd(
+        self, sd_identifier: str, *, body_identity: BodyIdentityArg = None
+    ) -> t.Any:
+        """Withdraw a Simplified Declaration; returns its new status."""
+        return self._call(
+            self.sd_client,
+            "withdrawSd",
+            sdIdentifier=sd_identifier,
+            **_soapheaders(body_identity),
+        )
+
+    def get_sd(
+        self, uuids: t.Sequence[t.Any], *, body_identity: BodyIdentityArg = None
+    ) -> t.List[t.Any]:
+        """Return the overview of Simplified Declarations.
+
+        Each item is a UUID string, a ``(uuid, version_number)`` tuple, or a
+        ``UuidAndVersionNumberType``/dict.
+        """
+        result = self._call(
+            self.sd_client,
+            "getSd",
+            uuidAndVersionNumberList=[_uuid_and_version(item) for item in uuids],
+            **_soapheaders(body_identity),
+        )
+        return list(result or [])
+
+    def get_sd_by_internal_reference(
+        self, internal_reference: str, *, body_identity: BodyIdentityArg = None
+    ) -> t.List[t.Any]:
+        """Return the overview of SDs with the given internal reference number."""
+        result = self._call(
+            self.sd_client,
+            "getSdByInternalReference",
+            internalReference=internal_reference,
+            **_soapheaders(body_identity),
+        )
+        return list(result or [])
+
+    def get_sd_by_identifiers(
+        self,
+        reference_number: str,
+        verification_number: str,
+        *,
+        body_identity: BodyIdentityArg = None,
+    ) -> t.Any:
+        """Retrieve an SD by reference and verification number.
+
+        The server no longer returns declaration content over the API: this always
+        raises :class:`py_eudr.exceptions.NotFoundError` (kept for API compatibility).
+        """
+        return self._call(
+            self.sd_client,
+            "getSdByIdentifiers",
+            referenceAndVerificationNumber={
+                "referenceNumber": reference_number,
+                "verificationNumber": verification_number,
+            },
+            **_soapheaders(body_identity),
+        )
+
+    # Verification
+
+    def verify_declaration(
+        self, reference_number: str, verification_number: str
+    ) -> t.Any:
+        """Verify a DDS or SD by its reference and verification number.
+
+        Returns ``result`` (e.g. ``EXISTING_USABLE``, ``NON_EXISTENT``), ``status`` and
+        ``dateTime``.
+        """
+        return self._call(
+            self.verify_client,
+            "verifyDeclaration",
+            referenceNumber=reference_number,
+            verificationNumber=verification_number,
+        )
+
+
+class ClientV3(_VersionedClient):
+    """Client of the EUDR API V3 (DDS, SD and Verify services)."""
+
+    dds_client_class = DueDiligenceStatementClientV3
+    sd_client_class = SimplifiedDeclarationClientV3
+    verify_client_class = VerifyDeclarationClientV3
+
+    if t.TYPE_CHECKING:
+        types: v3.V3Types
+
+        def authenticate(
+            self,
+            *,
+            username: str,
+            authentication_key: str,
+            client_id: t.Optional[str] = None,
+        ) -> "ClientV3": ...
+        def authenticated(
+            self,
+            *,
+            username: str,
+            authentication_key: str,
+            client_id: t.Optional[str] = None,
+        ) -> t.ContextManager["ClientV3"]: ...
+        def submit_dds(
+            self,
+            operator_role: "v3.OperatorRoleType",
+            statement: "v3.DueDiligenceStatementBaseType | v3._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> str: ...
+        def amend_dds(
+            self,
+            uuid: str,
+            statement: "v3.DueDiligenceStatementBaseType | v3._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v3.DdsModificationResponseType": ...
+        def withdraw_dds(
+            self, uuid: str, *, body_identity: BodyIdentityArg = None
+        ) -> "v3.DdsModificationResponseType": ...
+        def get_dds(
+            self, uuids: t.Sequence[str], *, body_identity: BodyIdentityArg = None
+        ) -> t.List["v3.OverviewType"]: ...
+        def get_dds_by_internal_reference(
+            self, internal_reference: str, *, body_identity: BodyIdentityArg = None
+        ) -> t.List["v3.OverviewType"]: ...
+        def get_dds_by_identifiers(
+            self,
+            reference_number: str,
+            verification_number: str,
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v3.DueDiligenceStatementBaseType": ...
+        def submit_sd(
+            self,
+            operator_role: "v3.SdOperatorRoleType",
+            statement: "v3.SimplifiedDeclarationBaseType | v3._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> str: ...
+        def update_sd(
+            self,
+            sd_identifier: str,
+            statement: "v3.SimplifiedDeclarationBaseType | v3._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v3.SdModificationResponseType": ...
+        def withdraw_sd(
+            self, sd_identifier: str, *, body_identity: BodyIdentityArg = None
+        ) -> "v3.SdModificationResponseType": ...
+        def get_sd(
+            self,
+            uuids: t.Sequence[
+                "str | t.Tuple[str, int] | v3.UuidAndVersionNumberType | v3._Dict"
+            ],
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> t.List["v3.OverviewType"]: ...
+        def get_sd_by_internal_reference(
+            self, internal_reference: str, *, body_identity: BodyIdentityArg = None
+        ) -> t.List["v3.OverviewType"]: ...
+        def get_sd_by_identifiers(
+            self,
+            reference_number: str,
+            verification_number: str,
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v3.SimplifiedDeclarationBaseType": ...
+        def verify_declaration(
+            self, reference_number: str, verification_number: str
+        ) -> "v3.VerifyDeclarationResponseType": ...
+
+
+class ClientV4(_VersionedClient):
+    """Client of the EUDR API V4 (DDS, SD and Verify services)."""
+
+    dds_client_class = DueDiligenceStatementClientV4
+    sd_client_class = SimplifiedDeclarationClientV4
+    verify_client_class = VerifyDeclarationClientV4
+
+    if t.TYPE_CHECKING:
+        types: v4.V4Types
+
+        def authenticate(
+            self,
+            *,
+            username: str,
+            authentication_key: str,
+            client_id: t.Optional[str] = None,
+        ) -> "ClientV4": ...
+        def authenticated(
+            self,
+            *,
+            username: str,
+            authentication_key: str,
+            client_id: t.Optional[str] = None,
+        ) -> t.ContextManager["ClientV4"]: ...
+        def submit_dds(
+            self,
+            operator_role: "v4.OperatorRoleType",
+            statement: "v4.DueDiligenceStatementBaseType | v4._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> str: ...
+        def amend_dds(
+            self,
+            uuid: str,
+            statement: "v4.DueDiligenceStatementBaseType | v4._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v4.DdsModificationResponseType": ...
+        def withdraw_dds(
+            self, uuid: str, *, body_identity: BodyIdentityArg = None
+        ) -> "v4.DdsModificationResponseType": ...
+        def get_dds(
+            self, uuids: t.Sequence[str], *, body_identity: BodyIdentityArg = None
+        ) -> t.List["v4.OverviewType"]: ...
+        def get_dds_by_internal_reference(
+            self, internal_reference: str, *, body_identity: BodyIdentityArg = None
+        ) -> t.List["v4.OverviewType"]: ...
+        def get_dds_by_identifiers(
+            self,
+            reference_number: str,
+            verification_number: str,
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v4.DueDiligenceStatementBaseType": ...
+        def submit_sd(
+            self,
+            operator_role: "v4.SdOperatorRoleType",
+            statement: "v4.SimplifiedDeclarationBaseType | v4._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> str: ...
+        def update_sd(
+            self,
+            sd_identifier: str,
+            statement: "v4.SimplifiedDeclarationBaseType | v4._Dict",
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v4.SdModificationResponseType": ...
+        def withdraw_sd(
+            self, sd_identifier: str, *, body_identity: BodyIdentityArg = None
+        ) -> "v4.SdModificationResponseType": ...
+        def get_sd(
+            self,
+            uuids: t.Sequence[
+                "str | t.Tuple[str, int] | v4.UuidAndVersionNumberType | v4._Dict"
+            ],
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> t.List["v4.OverviewType"]: ...
+        def get_sd_by_internal_reference(
+            self, internal_reference: str, *, body_identity: BodyIdentityArg = None
+        ) -> t.List["v4.OverviewType"]: ...
+        def get_sd_by_identifiers(
+            self,
+            reference_number: str,
+            verification_number: str,
+            *,
+            body_identity: BodyIdentityArg = None,
+        ) -> "v4.SimplifiedDeclarationBaseType": ...
+        def verify_declaration(
+            self, reference_number: str, verification_number: str
+        ) -> "v4.VerifyDeclarationResponseType": ...
