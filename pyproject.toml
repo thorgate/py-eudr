@@ -1,6 +1,6 @@
 [project]
 name = "py-eudr"
-version = "0.1.0"
+version = "1.0.0"
 description = "Python client for the EU Deforestation Regulation (EUDR) Information System SOAP API (V3 and V4)"
 authors = [
     {name = "Sergey Kovalskiy",email = "sergey@thorgate.eu"}
