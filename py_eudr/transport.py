@@ -13,6 +13,7 @@ import re
 import typing as t
 from urllib.parse import parse_qs, urlparse
 
+import requests
 from zeep.transports import Transport
 
 EUDR_HOSTS = frozenset(
@@ -47,14 +48,17 @@ def vendored_path(url: str) -> t.Optional[str]:
         return None
     service_name = parsed.path.rstrip("/").rsplit("/", 1)[-1]
     query = parse_qs(parsed.query, keep_blank_values=True)
-    if "xsd" in query:
-        file_name = f"xsd{int(query['xsd'][0])}.xsd"
-    elif query.get("wsdl", [""])[0]:
-        file_name = f"wsdl{int(query['wsdl'][0])}.wsdl"
-    elif "wsdl" in query:
-        file_name = f"{service_name}.wsdl"
-    else:
-        return None
+    try:
+        if "xsd" in query:
+            file_name = f"xsd{int(query['xsd'][0])}.xsd"
+        elif query.get("wsdl", [""])[0]:
+            file_name = f"wsdl{int(query['wsdl'][0])}.wsdl"
+        elif "wsdl" in query:
+            file_name = f"{service_name}.wsdl"
+        else:
+            return None
+    except ValueError:
+        raise SchemaNotVendoredError(f"Malformed EUDR schema URL {url}") from None
     return f"schemas/{service_directory(service_name)}/{file_name}"
 
 
@@ -70,6 +74,25 @@ def load_vendored(url: str) -> t.Optional[bytes]:
     if data is None:
         raise SchemaNotVendoredError(f"No vendored schema for {url} (expected {path})")
     return data
+
+
+def make_transport(
+    *,
+    vendored_schemas: bool = True,
+    timeout: float = 300,
+    operation_timeout: t.Optional[float] = 60,
+    session: t.Optional[requests.Session] = None,
+) -> Transport:
+    """Build the transport used by the EUDR clients.
+
+    ``timeout`` applies to loading WSDL/XSD files (only with ``vendored_schemas=False``),
+    ``operation_timeout`` to SOAP calls. Pass ``session`` to share one
+    :class:`requests.Session` (connection pool, proxies, retries) between clients.
+    """
+    transport_class = VendoredSchemaTransport if vendored_schemas else Transport
+    return transport_class(
+        timeout=timeout, operation_timeout=operation_timeout, session=session
+    )
 
 
 class VendoredSchemaTransport(Transport):

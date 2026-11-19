@@ -1,16 +1,21 @@
+import copy
 import datetime
-import sys
-
-if sys.version_info >= (3, 9):
-    import zoneinfo
-else:
-    from backports import zoneinfo
 
 from zeep.wsse.username import UsernameToken
 from zeep.wsse.utils import WSU, ensure_id
 
 
+def _zulu(value: datetime.datetime) -> str:
+    return value.isoformat(sep="T", timespec="seconds").replace("+00:00", "Z")
+
+
 class EUDRUsernameToken(UsernameToken):
+    """WS-Security UsernameToken (password digest) with a fresh wsu:Timestamp per request.
+
+    One token is shared by all requests made with the same credentials, possibly
+    concurrently, so ``apply`` never mutates it: the timestamp is built on a copy.
+    """
+
     TIMESTAMP_TOKEN_TTL = 20
 
     def __init__(self, username, authentication_key):
@@ -22,30 +27,17 @@ class EUDRUsernameToken(UsernameToken):
         )
 
     def apply(self, envelope, headers):
-        self.make_timestamp_token()
-        return super().apply(envelope, headers)
+        token = copy.copy(self)
+        token.created, token.timestamp_token = self.make_timestamp_token()
+        return UsernameToken.apply(token, envelope, headers)
 
     def make_timestamp_token(self):
+        """Return ``(created, wsu:Timestamp element)`` for a new request."""
+        created = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        expires = created + datetime.timedelta(seconds=self.TIMESTAMP_TOKEN_TTL)
         timestamp_token = WSU.Timestamp()
-        today_datetime = datetime.datetime.now(zoneinfo.ZoneInfo("UTC")).replace(
-            microsecond=0
+        timestamp_token.extend(
+            [WSU.Created(_zulu(created)), WSU.Expires(_zulu(expires))]
         )
-        expires_datetime = today_datetime + datetime.timedelta(
-            seconds=self.TIMESTAMP_TOKEN_TTL
-        )
-        timestamp_elements = [
-            WSU.Created(
-                today_datetime.isoformat(sep="T", timespec="seconds").replace(
-                    "+00:00", "Z"
-                )
-            ),
-            WSU.Expires(
-                expires_datetime.isoformat(sep="T", timespec="seconds").replace(
-                    "+00:00", "Z"
-                )
-            ),
-        ]
-        timestamp_token.extend(timestamp_elements)
         ensure_id(timestamp_token)
-        self.created = today_datetime
-        self.timestamp_token = timestamp_token
+        return created, timestamp_token

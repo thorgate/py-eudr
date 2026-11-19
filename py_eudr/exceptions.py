@@ -5,7 +5,13 @@ from zeep.exceptions import Fault
 
 
 class EUDRError(Exception):
-    pass
+    """Base class of py-eudr errors.
+
+    zeep's own errors (``zeep.exceptions.ValidationError`` for invalid values before
+    sending, ``TransportError`` for non-SOAP HTTP errors, ``XMLSyntaxError``) are not
+    part of this hierarchy; ``zeep.exceptions.Error`` catches those and every
+    :class:`EUDRFault`.
+    """
 
 
 class ErrorDetail(t.NamedTuple):
@@ -41,7 +47,7 @@ class EUDRFault(EUDRError, Fault):
         return str(self.message)
 
 
-class ValidationError(EUDRFault):
+class BusinessRulesError(EUDRFault):
     """``BusinessRulesValidationException``: the request violates a business rule."""
 
 
@@ -54,7 +60,7 @@ class NotFoundError(EUDRFault):
 
 
 FAULT_CLASSES: t.Dict[str, t.Type[EUDRFault]] = {
-    "BusinessRulesValidationException": ValidationError,
+    "BusinessRulesValidationException": BusinessRulesError,
     "PermissionDeniedException": PermissionDeniedError,
     "NotFoundException": NotFoundError,
 }
@@ -65,7 +71,8 @@ def _local_name(node: t.Any) -> str:
 
 
 def parse_errors(detail: t.Any) -> t.List[ErrorDetail]:
-    if detail is None:
+    # zeep sets `detail` to the raw response bytes for non-SOAP error responses.
+    if not etree.iselement(detail):
         return []
     errors = []
     for node in detail.iter():
@@ -85,7 +92,7 @@ def parse_errors(detail: t.Any) -> t.List[ErrorDetail]:
 def translate_fault(fault: Fault) -> Fault:
     """Return the matching :class:`EUDRFault` subclass for a zeep fault, or the
     fault itself when its detail is not a known EUDR exception."""
-    if isinstance(fault, EUDRFault) or fault.detail is None:
+    if isinstance(fault, EUDRFault) or not etree.iselement(fault.detail):
         return fault
     for child in fault.detail:
         cls = FAULT_CLASSES.get(_local_name(child))
